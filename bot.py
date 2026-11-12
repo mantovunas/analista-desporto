@@ -1,5 +1,5 @@
 """Analista diário de futebol -> Telegram.
-
+ 
 Fluxo: resultados da época (football-data.org) -> modelo de Poisson ->
 probabilidades 1X2 / Over-Under 2.5 / BTTS -> compara com odds (The Odds API,
 Betclic se disponível) -> envia as melhores "value bets" por Telegram.
@@ -9,10 +9,12 @@ import re
 import sys
 import math
 import time
+import html
 import difflib
 import datetime as dt
+from zoneinfo import ZoneInfo
 import requests
-
+ 
 FD_KEY = os.environ["FOOTBALL_DATA_KEY"]
 ODDS_KEY = os.environ["ODDS_API_KEY"]
 TG_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -21,7 +23,7 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 BOOKMAKER = os.getenv("BOOKMAKER", "betclic_fr")
 ODDS_REGIONS = os.getenv("ODDS_REGIONS", "fr")
-
+ 
 # código football-data.org: (nome, chave The Odds API)
 LEAGUES = {
     "PPL": ("Liga Portugal", "soccer_portugal_primeira_liga"),
@@ -29,16 +31,24 @@ LEAGUES = {
     "PD": ("La Liga", "soccer_spain_la_liga"),
     "CL": ("Champions League", "soccer_uefa_champs_league"),
 }
-
-HOURS_AHEAD = 200       # jogos nas próximas X horas
+ 
+HOURS_AHEAD = 48       # jogos nas próximas X horas
+FALLBACK_HOURS = 240   # se não houver jogos perto, mostra os próximos (10 dias)
+FALLBACK_PER_LEAGUE = 3
 MIN_EDGE = 0.05        # vantagem mínima (5%) para sugerir
 MAX_EDGE = 0.30        # acima disto desconfia-se do modelo
+WARN_EDGE = 0.15       # acima disto avisa que a vantagem parece exagerada
 MIN_ODD, MAX_ODD = 1.40, 6.00
 MIN_GAMES = 4          # jogos mínimos por equipa para confiar
 SHRINK = 3             # "jogos fictícios" na média, evita extremos
 MAX_GOALS = 10
-
-
+ 
+LISBON = ZoneInfo("Europe/Lisbon")
+DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+DIAS_C = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
+ 
+ 
 # ---------- dados ----------
 def fd_matches(code):
     r = requests.get(
@@ -50,8 +60,8 @@ def fd_matches(code):
     r.raise_for_status()
     time.sleep(7)  # limite grátis: 10 pedidos/min
     return r.json().get("matches", [])
-
-
+ 
+ 
 def build_strengths(matches):
     gf, ga, n = {}, {}, {}
     tot_h = tot_a = 0
@@ -75,14 +85,14 @@ def build_strengths(matches):
         att[t] = ((gf[t] + SHRINK * avg_team) / (n[t] + SHRINK)) / avg_team
         dfn[t] = ((ga[t] + SHRINK * avg_team) / (n[t] + SHRINK)) / avg_team
     return {"att": att, "def": dfn, "n": n, "avg_h": avg_h, "avg_a": avg_a}
-
-
+ 
+ 
 def norm(s):
     s = s.lower()
     s = re.sub(r"\b(fc|cf|sc|cd|afc|sad|club|clube|de|futebol|sporting clube)\b", " ", s)
     return re.sub(r"[^a-z0-9 ]", "", s).strip()
-
-
+ 
+ 
 def match_team(name, candidates):
     nn = norm(name)
     best, score = None, 0
@@ -94,8 +104,8 @@ def match_team(name, candidates):
         if r > score:
             best, score = c, r
     return best if score >= 0.6 else None
-
-
+ 
+ 
 def odds_events(sport):
     r = requests.get(
         f"https://api.the-odds-api.com/v4/sports/{sport}/odds",
@@ -109,13 +119,13 @@ def odds_events(sport):
         print("Odds erro", sport, r.status_code, r.text[:200], file=sys.stderr)
         return []
     return r.json()
-
-
+ 
+ 
 # ---------- modelo ----------
 def pois(k, lam):
     return math.exp(-lam) * lam ** k / math.factorial(k)
-
-
+ 
+ 
 def predict(st, home, away):
     lh = st["att"][home] * st["def"][away] * st["avg_h"]
     la = st["att"][away] * st["def"][home] * st["avg_a"]
@@ -133,16 +143,16 @@ def predict(st, home, away):
         p[k] /= tot
     p["lh"], p["la"] = lh, la
     return p
-
-
+ 
+ 
 def pick_book(event):
     books = event.get("bookmakers", [])
     for b in books:
         if b["key"] == BOOKMAKER:
             return b
     return books[0] if books else None
-
-
+ 
+ 
 def analyse_event(ev, st):
     home = match_team(ev["home_team"], st["att"].keys())
     away = match_team(ev["away_team"], st["att"].keys())
@@ -176,46 +186,96 @@ def analyse_event(ev, st):
         "home": ev["home_team"], "away": ev["away_team"], "time": ev["commence_time"],
         "p": p, "conf": conf, "book": book["title"], "picks": good,
     }
-
-
-# ---------- saída ----------
+ 
+ 
+# ---------- saída (Telegram em HTML) ----------
+def esc(s):
+    return html.escape(str(s))
+ 
+ 
+def to_lisbon(iso):
+    return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(LISBON)
+ 
+ 
 def fmt_time(iso):
-    t = dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return t.strftime("%d/%m %H:%MZ")
-
-
-def build_message(results):
-    lines = [f"⚽ Análise do dia — {dt.date.today():%d/%m/%Y}", ""]
-    all_picks = []
+    t = to_lisbon(iso)
+    return f"{DIAS_C[t.weekday()]} {t:%d/%m} · {t:%H:%M}"
+ 
+ 
+def bar(p, n=10):
+    f = round(p * n)
+    return "▰" * f + "▱" * (n - f)
+ 
+ 
+def conf_txt(c):
+    return {"alta": "🟢 alta", "média": "🟡 média", "baixa": "🔴 baixa"}[c]
+ 
+ 
+def game_block(g):
+    p = g["p"]
+    return "\n".join([
+        f"🕗 <i>{fmt_time(g['time'])}</i>",
+        f"<b>{esc(g['home'])}</b> vs <b>{esc(g['away'])}</b>",
+        f"{bar(p['H'])} {p['H']:.0%} 🏠 {esc(g['home'])}",
+        f"{bar(p['D'])} {p['D']:.0%} 🤝 Empate",
+        f"{bar(p['A'])} {p['A']:.0%} ✈️ {esc(g['away'])}",
+        f"⚽ Golos esperados: {p['lh']:.1f} – {p['la']:.1f}",
+        f"📈 +2.5 golos: {p['O25']:.0%} · Ambas marcam: {p['BTTS']:.0%}",
+        f"🔎 Confiança: {conf_txt(g['conf'])}",
+    ])
+ 
+ 
+def build_blocks(results, fallback):
+    now = dt.datetime.now(LISBON)
+    blocks = [
+        "⚽ <b>ANÁLISE DO DIA</b>\n"
+        f"📅 {DIAS[now.weekday()]}, {now:%d/%m/%Y}\n"
+        "━━━━━━━━━━━━━━━"
+    ]
+    if fallback:
+        blocks.append(f"ℹ️ <i>Sem jogos nas próximas {HOURS_AHEAD}h nas ligas seguidas "
+                      "(pausa de seleções?). A mostrar os próximos jogos.</i>")
+    all_picks, books = [], set()
     for league, games in results.items():
         if not games:
             continue
-        lines.append(f"🏆 {league}")
+        blocks.append(f"🏆 <b>{esc(league.upper())}</b>")
         for g in games:
-            p = g["p"]
-            lines.append(
-                f"{g['home']} vs {g['away']} ({fmt_time(g['time'])})\n"
-                f"  1X2: {p['H']:.0%} / {p['D']:.0%} / {p['A']:.0%} | "
-                f"+2.5: {p['O25']:.0%} | BTTS: {p['BTTS']:.0%} | "
-                f"golos esperados {p['lh']:.1f}-{p['la']:.1f} | confiança {g['conf']}"
-            )
+            blocks.append(game_block(g))
+            books.add(g["book"])
             for pk in g["picks"]:
                 all_picks.append((pk["edge"], g, pk))
-        lines.append("")
+    if not any(results.values()):
+        blocks.append("Sem jogos analisados nos próximos dias.")
     all_picks.sort(key=lambda x: -x[0])
-    lines.append("🎯 Melhores oportunidades (modelo vs odds)")
+    head = "🎯 <b>MELHORES OPORTUNIDADES</b>"
     if not all_picks:
-        lines.append("Nenhuma vantagem clara hoje. Não apostar também é uma decisão.")
-    for edge, g, pk in all_picks[:6]:
-        lines.append(
-            f"• {g['home']}-{g['away']}: {pk['label']} @ {pk['odd']:.2f} "
-            f"({g['book']}) — modelo {pk['prob']:.0%}, vantagem {edge:+.0%}, "
-            f"confiança {g['conf']}"
-        )
-    lines += ["", "⚠️ Estimativa estatística, não garantia. Aposta com responsabilidade."]
-    return "\n".join(lines), all_picks
-
-
+        blocks.append(head + "\nNenhuma vantagem clara. Não apostar também é uma decisão. 🧘")
+    else:
+        lines = [head, ""]
+        for i, (edge, g, pk) in enumerate(all_picks[:6]):
+            warn = "\n   ⚠️ <i>Vantagem muito alta: desconfia, o modelo pode estar errado.</i>" \
+                if edge > WARN_EDGE else ""
+            lines.append(
+                f"{NUMS[i]} <b>{esc(pk['label'])}</b> @ <b>{pk['odd']:.2f}</b>\n"
+                f"   {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}\n"
+                f"   📊 Modelo {pk['prob']:.0%} · vantagem <b>{edge:+.0%}</b> · "
+                f"{conf_txt(g['conf'])}{warn}"
+            )
+        blocks.append("\n".join(lines))
+    if books:
+        blocks.append("📚 Odds: " + esc(", ".join(sorted(books))))
+    blocks.append(
+        "ℹ️ <i>Vantagem = quanto a odd paga a mais do que o modelo acha justo.</i>\n"
+        "⚠️ <i>Estimativa estatística, não garantia. Aposta com responsabilidade.</i>"
+    )
+    return blocks
+ 
+ 
+def plain_text(blocks):
+    return re.sub(r"<[^>]+>", "", "\n\n".join(blocks))
+ 
+ 
 def gemini_summary(text):
     if not GEMINI_KEY:
         return ""
@@ -231,24 +291,41 @@ def gemini_summary(text):
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=60,
         )
-        return "\n\n🧠 " + r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return "🧠 <b>RESUMO</b>\n" + esc(txt)
     except Exception as e:  # noqa: BLE001
         print("Gemini falhou:", e, file=sys.stderr)
+        try:
+            print("Resposta do Gemini:", r.text[:300], file=sys.stderr)
+        except Exception:  # noqa: BLE001
+            pass
         return ""
-
-
-def telegram(text):
-    for i in range(0, len(text), 3900):
-        requests.post(
+ 
+ 
+def telegram(blocks):
+    chunks, cur = [], ""
+    for b in blocks:
+        if cur and len(cur) + len(b) + 2 > 3800:
+            chunks.append(cur)
+            cur = b
+        else:
+            cur = f"{cur}\n\n{b}" if cur else b
+    if cur:
+        chunks.append(cur)
+    for c in chunks:
+        r = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT, "text": text[i:i + 3900]},
+            json={"chat_id": TG_CHAT, "text": c, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
             timeout=30,
-        ).raise_for_status()
-
-
+        )
+        r.raise_for_status()
+ 
+ 
 def main():
     now = dt.datetime.now(dt.timezone.utc)
-    limit = now + dt.timedelta(hours=HOURS_AHEAD)
+    near = now + dt.timedelta(hours=HOURS_AHEAD)
+    far = now + dt.timedelta(hours=FALLBACK_HOURS)
     results = {}
     for code, (name, sport) in LEAGUES.items():
         try:
@@ -259,17 +336,32 @@ def main():
             games = []
             for ev in odds_events(sport):
                 t = dt.datetime.fromisoformat(ev["commence_time"].replace("Z", "+00:00"))
-                if not (now <= t <= limit):
+                if not (now <= t <= far):
                     continue
                 g = analyse_event(ev, st)
                 if g:
                     games.append(g)
+            games.sort(key=lambda g: g["time"])
             results[name] = games
         except Exception as e:  # noqa: BLE001
             print("Erro em", name, e, file=sys.stderr)
-    msg, _ = build_message(results)
-    telegram(msg + gemini_summary(msg))
-
-
+ 
+    def is_near(g):
+        return dt.datetime.fromisoformat(g["time"].replace("Z", "+00:00")) <= near
+ 
+    near_res = {n: [g for g in gs if is_near(g)] for n, gs in results.items()}
+    fallback = not any(near_res.values())
+    if fallback:
+        shown = {n: gs[:FALLBACK_PER_LEAGUE] for n, gs in results.items()}
+    else:
+        shown = near_res
+    blocks = build_blocks(shown, fallback)
+    summary = gemini_summary(plain_text(blocks))
+    if summary:
+        blocks.insert(len(blocks) - 1, summary)
+    telegram(blocks)
+ 
+ 
 if __name__ == "__main__":
     main()
+ 
