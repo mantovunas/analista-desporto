@@ -30,7 +30,7 @@ LEAGUES = {
     "CL": ("Champions League", "soccer_uefa_champs_league"),
 }
 
-HOURS_AHEAD = 36       # jogos nas próximas X horas
+HOURS_AHEAD = 200       # jogos nas próximas X horas
 MIN_EDGE = 0.05        # vantagem mínima (5%) para sugerir
 MAX_EDGE = 0.30        # acima disto desconfia-se do modelo
 MIN_ODD, MAX_ODD = 1.40, 6.00
