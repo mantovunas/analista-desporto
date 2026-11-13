@@ -2,7 +2,7 @@ name: analista-futebol
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # 9h UTC = 9h em Lisboa no inverno; no verão usa "0 8 * * *"
+    - cron: "17 9 * * *"   # 9h17 UTC = 9h17 em Lisboa no inverno; no verão usa "17 8 * * *"
   workflow_dispatch:       # botão para correr manualmente
 
 jobs:
