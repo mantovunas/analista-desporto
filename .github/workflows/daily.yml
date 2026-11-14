@@ -32,10 +32,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - name: Guardar histórico
         run: |
-          mkdir -p historico
+          mkdir -p historico dados
           git config user.name "analista-bot"
           git config user.email "analista-bot@users.noreply.github.com"
-          git add historico
+          git add historico dados
           if git diff --cached --quiet; then
             echo "Sem alterações no histórico"
           else
