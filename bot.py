@@ -1,12 +1,8 @@
-"""Analista diário de futebol -> Telegram (versão 3: com histórico).
+"""Analista diário de futebol -> Telegram (versão 4: épocas anteriores + mercado).
 
-Fluxo: resultados da época (football-data.org) -> modelo de Poisson ->
-probabilidades 1X2 / Over-Under 2.5 / BTTS -> compara com odds (The Odds API,
-Betclic se disponível) -> envia as melhores "value bets" por Telegram.
-
-Histórico (novo): cada sugestão e cada previsão ficam guardadas em CSV na pasta
-"historico/". Nas execuções seguintes o bot descobre o resultado real, marca a
-sugestão como ganha/perdida e mostra o desempenho acumulado na mensagem.
+Fluxo: resultados da época atual e anteriores com decaimento (football-data.org) ->
+modelo de Poisson -> probabilidades 1X2 / Over-Under 2.5 / BTTS -> compara com odds
+(The Odds API) -> envia discordâncias para o Telegram e guarda histórico em CSV.
 """
 import os
 import re
@@ -25,7 +21,7 @@ ODDS_KEY = os.environ["ODDS_API_KEY"]
 TG_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TG_CHAT = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 BOOKMAKER = os.getenv("BOOKMAKER", "betclic_fr")
 ODDS_REGIONS = os.getenv("ODDS_REGIONS", "fr")
 
@@ -40,12 +36,14 @@ LEAGUES = {
 HOURS_AHEAD = 48       # jogos nas próximas X horas
 FALLBACK_HOURS = 240   # se não houver jogos perto, mostra os próximos (10 dias)
 FALLBACK_PER_LEAGUE = 3
-MIN_EDGE = 0.05        # vantagem mínima (5%) para sugerir
+MIN_EDGE = 0.05        # vantagem mínima (5%) para destacar
 MAX_EDGE = 0.30        # acima disto desconfia-se do modelo
-WARN_EDGE = 0.15       # acima disto avisa que a vantagem parece exagerada
+WARN_EDGE = 0.15       # acima disto avisa que a diferença parece exagerada
 MIN_ODD, MAX_ODD = 1.40, 6.00
-MIN_GAMES = 4          # jogos mínimos por equipa para confiar
+MIN_GAMES = 4          # jogos mínimos (pesados) por equipa para confiar
 SHRINK = 3             # "jogos fictícios" na média, evita extremos
+HALF_LIFE_DAYS = 365.0 # um jogo de há 1 ano vale metade de um jogo de hoje
+PAST_SEASONS = 2       # tenta ir buscar até 2 épocas anteriores
 MAX_GOALS = 10
 
 # histórico
@@ -77,16 +75,38 @@ def parse_iso(s):
 
 
 # ---------- dados ----------
-def fd_matches(code):
+def current_season_start(now):
+    # Na Europa, a época começa em julho/agosto (ex: nov 2026 -> época 2026)
+    return now.year if now.month >= 7 else now.year - 1
+
+
+def fd_matches(code, season=None):
+    params = {"status": "FINISHED"}
+    if season is not None:
+        params["season"] = season
     r = requests.get(
         f"https://api.football-data.org/v4/competitions/{code}/matches",
         headers={"X-Auth-Token": FD_KEY},
-        params={"status": "FINISHED"},
+        params=params,
         timeout=30,
     )
-    r.raise_for_status()
     time.sleep(7)  # limite grátis: 10 pedidos/min
+    if r.status_code in (400, 403, 404) and season is not None:
+        print(f"Aviso: época {season} indisponível no plano atual para {code} (HTTP {r.status_code}).", file=sys.stderr)
+        return []
+    r.raise_for_status()
     return r.json().get("matches", [])
+
+
+def fd_all_history(code, now):
+    """Vai buscar a época atual e tenta buscar épocas anteriores."""
+    matches = fd_matches(code)
+    cur_yr = current_season_start(now)
+    for i in range(1, PAST_SEASONS + 1):
+        old = fd_matches(code, season=cur_yr - i)
+        if old:
+            matches.extend(old)
+    return matches
 
 
 def score90(m):
@@ -99,30 +119,34 @@ def score90(m):
     return None
 
 
-def build_strengths(matches):
-    gf, ga, n = {}, {}, {}
-    tot_h = tot_a = 0
+def build_strengths(matches, now):
+    gf, ga, w_sum = {}, {}, {}
+    tot_h = tot_a = tot_w = 0.0
     for m in matches:
         sc = score90(m)
         if sc is None:
             continue
+        ko = parse_iso(m["utcDate"])
+        age_days = max(0.0, (now - ko).total_seconds() / 86400.0)
+        w = 0.5 ** (age_days / HALF_LIFE_DAYS)
+        
         sh, sa = sc
         h, a = m["homeTeam"]["name"], m["awayTeam"]["name"]
         for t in (h, a):
-            gf.setdefault(t, 0); ga.setdefault(t, 0); n.setdefault(t, 0)
-        gf[h] += sh; ga[h] += sa; n[h] += 1
-        gf[a] += sa; ga[a] += sh; n[a] += 1
-        tot_h += sh; tot_a += sa
-    games = sum(n.values()) / 2
-    if games < 10:
+            gf.setdefault(t, 0.0); ga.setdefault(t, 0.0); w_sum.setdefault(t, 0.0)
+        gf[h] += sh * w; ga[h] += sa * w; w_sum[h] += w
+        gf[a] += sa * w; ga[a] += sh * w; w_sum[a] += w
+        tot_h += sh * w; tot_a += sa * w; tot_w += w
+
+    if tot_w < 10:
         return None
-    avg_h, avg_a = tot_h / games, tot_a / games
+    avg_h, avg_a = tot_h / tot_w, tot_a / tot_w
     avg_team = (avg_h + avg_a) / 2
     att, dfn = {}, {}
-    for t in n:
-        att[t] = ((gf[t] + SHRINK * avg_team) / (n[t] + SHRINK)) / avg_team
-        dfn[t] = ((ga[t] + SHRINK * avg_team) / (n[t] + SHRINK)) / avg_team
-    return {"att": att, "def": dfn, "n": n, "avg_h": avg_h, "avg_a": avg_a}
+    for t in w_sum:
+        att[t] = ((gf[t] + SHRINK * avg_team) / (w_sum[t] + SHRINK)) / avg_team
+        dfn[t] = ((ga[t] + SHRINK * avg_team) / (w_sum[t] + SHRINK)) / avg_team
+    return {"att": att, "def": dfn, "n": w_sum, "avg_h": avg_h, "avg_a": avg_a}
 
 
 def norm(s):
@@ -198,8 +222,8 @@ def analyse_event(ev, st):
     if not home or not away or not book:
         return None
     p = predict(st, home, away)
-    conf = "alta" if min(st["n"][home], st["n"][away]) >= 10 else (
-        "média" if min(st["n"][home], st["n"][away]) >= MIN_GAMES else "baixa")
+    min_w = min(st["n"][home], st["n"][away])
+    conf = "alta" if min_w >= 10 else ("média" if min_w >= MIN_GAMES else "baixa")
     picks = []
     for mk in book["markets"]:
         if mk["key"] == "h2h":
@@ -219,8 +243,12 @@ def analyse_event(ev, st):
     good = []
     for lab, prob, odd, sel in picks:
         edge = prob * odd - 1
+        imp_prob = 1.0 / odd if odd > 0 else 0.0
         if MIN_EDGE <= edge <= MAX_EDGE and MIN_ODD <= odd <= MAX_ODD:
-            good.append({"label": lab, "prob": prob, "odd": odd, "edge": edge, "sel": sel})
+            good.append({
+                "label": lab, "prob": prob, "imp_prob": imp_prob,
+                "odd": odd, "edge": edge, "sel": sel
+            })
     return {
         "id": ev.get("id") or f"{ev['home_team']}|{ev['away_team']}|{ev['commence_time']}",
         "home": ev["home_team"], "away": ev["away_team"], "time": ev["commence_time"],
@@ -465,19 +493,19 @@ def build_blocks(results, fallback, extra=None):
     if not any(results.values()):
         blocks.append("Sem jogos analisados nos próximos dias.")
     all_picks.sort(key=lambda x: -x[0])
-    head = "🎯 <b>MELHORES OPORTUNIDADES</b>"
+    head = "🎯 <b>ONDE O MODELO DISCORDA DO MERCADO</b>"
     if not all_picks:
-        blocks.append(head + "\nNenhuma vantagem clara. Não apostar também é uma decisão. 🧘")
+        blocks.append(head + "\nNenhuma discordância relevante. Não apostar também é uma decisão. 🧘")
     else:
         lines = [head, ""]
         for i, (edge, g, pk) in enumerate(all_picks[:6]):
-            warn = "\n   ⚠️ <i>Vantagem muito alta: desconfia, o modelo pode estar errado.</i>" \
+            warn = "\n   ⚠️ <i>Diferença muito alta: desconfia, o modelo pode estar errado.</i>" \
                 if edge > WARN_EDGE else ""
             lines.append(
                 f"{NUMS[i]} <b>{esc(pk['label'])}</b> @ <b>{pk['odd']:.2f}</b>\n"
                 f"   {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}\n"
-                f"   📊 Modelo {pk['prob']:.0%} · vantagem <b>{edge:+.0%}</b> · "
-                f"{conf_txt(g['conf'])}{warn}"
+                f"   📊 Modelo {pk['prob']:.0%} vs Mercado {pk['imp_prob']:.0%} "
+                f"(dif. <b>{edge:+.0%}</b>) · {conf_txt(g['conf'])}{warn}"
             )
         blocks.append("\n".join(lines))
     if extra:
@@ -485,7 +513,7 @@ def build_blocks(results, fallback, extra=None):
     if books:
         blocks.append("📚 Odds: " + esc(", ".join(sorted(books))))
     blocks.append(
-        "ℹ️ <i>Vantagem = quanto a odd paga a mais do que o modelo acha justo.</i>\n"
+        "ℹ️ <i>Diferença = quanto a odd paga a mais do que o modelo estima (não garante lucro).</i>\n"
         "⚠️ <i>Estimativa estatística, não garantia. Aposta com responsabilidade.</i>"
     )
     return blocks
@@ -547,9 +575,9 @@ def main(now=None):
     results, idx = {}, {}
     for code, (name, sport) in LEAGUES.items():
         try:
-            matches = fd_matches(code)
+            matches = fd_all_history(code, now)
             add_index(idx, matches)
-            st = build_strengths(matches)
+            st = build_strengths(matches, now)
             if not st:
                 print("Poucos dados:", name, file=sys.stderr)
                 continue
@@ -598,4 +626,3 @@ def main(now=None):
 
 if __name__ == "__main__":
     main()
- 
