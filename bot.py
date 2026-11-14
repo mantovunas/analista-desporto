@@ -1,4 +1,4 @@
-"""Analista diário de futebol -> Telegram (versão 5: forças separadas Casa/Fora).
+"""Analista diário de futebol -> Telegram (versão 6: 7 ligas + forças Casa/Fora).
 
 Fluxo: resultados da época atual e anteriores com decaimento (football-data.org) ->
 modelo de Poisson com forças separadas em casa e fora -> probabilidades 1X2 /
@@ -27,10 +27,14 @@ BOOKMAKER = os.getenv("BOOKMAKER", "betclic_fr")
 ODDS_REGIONS = os.getenv("ODDS_REGIONS", "fr")
 
 # código football-data.org: (nome, chave The Odds API)
+# 7 ligas x 2 créditos/dia x 30 dias = ~420 créditos/mês (limite grátis ~500)
 LEAGUES = {
     "PPL": ("Liga Portugal", "soccer_portugal_primeira_liga"),
     "PL": ("Premier League", "soccer_epl"),
     "PD": ("La Liga", "soccer_spain_la_liga"),
+    "SA": ("Serie A", "soccer_italy_serie_a"),
+    "BL1": ("Bundesliga", "soccer_germany_bundesliga"),
+    "FL1": ("Ligue 1", "soccer_france_ligue_one"),
     "CL": ("Champions League", "soccer_uefa_champs_league"),
 }
 
@@ -161,7 +165,7 @@ def build_strengths(matches, now):
 
 def norm(s):
     s = s.lower()
-    s = re.sub(r"\b(fc|cf|sc|cd|afc|sad|club|clube|de|futebol|sporting clube)\b", " ", s)
+    s = re.sub(r"\b(fc|cf|sc|cd|afc|sad|club|clube|de|futebol|sporting clube|ac|as|us|ss|ssc|tsv|vfl|vfb|fsv|rb|ogc|osc|aj|rc)\b", " ", s)
     return re.sub(r"[^a-z0-9 ]", "", s).strip()
 
 
