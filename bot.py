@@ -1,9 +1,14 @@
-"""Analista diário de futebol -> Telegram (versão 6: 7 ligas + forças Casa/Fora).
+"""Analista diário de futebol -> Telegram (versão 7).
 
-Fluxo: resultados da época atual e anteriores com decaimento (football-data.org) ->
-modelo de Poisson com forças separadas em casa e fora -> probabilidades 1X2 /
-Over-Under 2.5 / BTTS -> compara com odds (The Odds API) -> envia discordâncias
-para o Telegram e guarda histórico em CSV.
+Fluxo:
+ 1. Resultados da época atual (football-data.org) + épocas anteriores (ficheiros CSV da
+    football-data.co.uk, descarregados uma vez e guardados em "dados/").
+ 2. Modelo de Poisson com peso decrescente no tempo (meia-vida de 1 ano).
+ 3. Odds de várias casas (The Odds API) -> probabilidades do "mercado" (consenso).
+ 4. Previsão final = mistura de mercado (maior parte) e modelo. Testes retroativos mostraram
+    que o mercado sozinho é o melhor previsor e que o modelo não o bate.
+ 5. Mostra favoritos claros, os jogos, e onde as odds pagam acima do consenso.
+ 6. Histórico (CSV em "historico/") para medir o desempenho real ao longo do tempo.
 """
 import os
 import re
@@ -13,6 +18,7 @@ import math
 import time
 import html
 import difflib
+import unicodedata
 import datetime as dt
 from zoneinfo import ZoneInfo
 import requests
@@ -27,7 +33,6 @@ BOOKMAKER = os.getenv("BOOKMAKER", "betclic_fr")
 ODDS_REGIONS = os.getenv("ODDS_REGIONS", "fr")
 
 # código football-data.org: (nome, chave The Odds API)
-# 7 ligas x 2 créditos/dia x 30 dias = ~420 créditos/mês (limite grátis ~500)
 LEAGUES = {
     "PPL": ("Liga Portugal", "soccer_portugal_primeira_liga"),
     "PL": ("Premier League", "soccer_epl"),
@@ -37,36 +42,50 @@ LEAGUES = {
     "FL1": ("Ligue 1", "soccer_france_ligue_one"),
     "CL": ("Champions League", "soccer_uefa_champs_league"),
 }
+# código na football-data.co.uk (épocas anteriores). A Champions não tem.
+CO_UK = {"PPL": "P1", "PL": "E0", "PD": "SP1", "SA": "I1", "BL1": "D1", "FL1": "F1"}
 
 HOURS_AHEAD = 48       # jogos nas próximas X horas
 FALLBACK_HOURS = 240   # se não houver jogos perto, mostra os próximos (10 dias)
 FALLBACK_PER_LEAGUE = 3
-MIN_EDGE = 0.05        # vantagem mínima (5%) para destacar
-MAX_EDGE = 0.30        # acima disto desconfia-se do modelo
-WARN_EDGE = 0.15       # acima disto avisa que a diferença parece exagerada
-MIN_ODD, MAX_ODD = 1.40, 6.00
-MIN_GAMES = 3          # jogos mínimos (pesados) por recinto (casa ou fora)
-SHRINK = 4             # "jogos fictícios" por recinto, evita extremos com amostras menores
-HALF_LIFE_DAYS = 365.0 # um jogo de há 1 ano vale metade de um jogo de hoje
-PAST_SEASONS = 2       # tenta ir buscar até 2 épocas anteriores
+MIN_GAMES = 4          # jogos (ponderados) mínimos por equipa para confiar
+SHRINK = 3             # "jogos fictícios" na média, evita extremos
 MAX_GOALS = 10
+
+HALF_LIFE_DAYS = 365   # um jogo de há 1 ano conta metade (melhor valor no teste retroativo)
+PRIOR_SEASONS = 2      # épocas anteriores a usar
+DATA_DIR = "dados"
+
+# previsão final = peso_modelo * modelo + (1 - peso_modelo) * mercado
+def model_weight(n_books):
+    if n_books >= 3: return 0.20
+    if n_books == 2: return 0.35
+    if n_books == 1: return 0.50
+    return 1.00
+
+# "odds acima do consenso": vantagem = prob_final * odd - 1
+MIN_EDGE = 0.04
+MAX_EDGE = 0.15        # acima disto desconfia-se (erro do modelo ou odd errada)
+WARN_EDGE = 0.10
+MIN_ODD, MAX_ODD = 1.40, 6.00
+CLEAR_FAV = 0.60       # "favorito claro" (nos testes acertou ~72-75% das vezes)
 
 # histórico
 HIST_DIR = "historico"
 PICKS_FILE = f"{HIST_DIR}/sugestoes.csv"
 PREDS_FILE = f"{HIST_DIR}/previsoes.csv"
-STALE_DAYS = 7         # sem resultado ao fim de X dias -> "sem_resultado"
-MATCH_WINDOW_H = 36    # tolerância (horas) ao emparelhar jogo e resultado
-MIN_SAMPLE = 100       # abaixo disto o placar ainda não é fiável
+STALE_DAYS = 7
+MATCH_WINDOW_H = 36
+MIN_SAMPLE = 100
 PICK_FIELDS = [
     "id", "enviado_em", "liga", "casa", "fora", "fd_casa", "fd_fora", "inicio_utc",
-    "sugestao", "selecao", "odd", "prob_modelo", "vantagem", "confianca",
-    "casa_apostas", "estado", "golos_casa", "golos_fora", "lucro",
+    "sugestao", "selecao", "odd", "prob_modelo", "prob_mercado", "prob_final", "vantagem",
+    "confianca", "casa_apostas", "estado", "golos_casa", "golos_fora", "lucro",
 ]
 PRED_FIELDS = [
     "id", "enviado_em", "liga", "casa", "fora", "fd_casa", "fd_fora", "inicio_utc",
-    "pH", "pD", "pA", "pO25", "pBTTS", "xg_casa", "xg_fora", "confianca",
-    "estado", "golos_casa", "golos_fora",
+    "pH", "pD", "pA", "pO25", "pBTTS", "mH", "mD", "mA", "fH", "fD", "fA", "nb",
+    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora",
 ]
 
 LISBON = ZoneInfo("Europe/Lisbon")
@@ -79,39 +98,70 @@ def parse_iso(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def fnum(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------- nomes de equipas ----------
+# Chaves já normalizadas (ver norm). Só o que a comparação aproximada não resolve sozinha.
+ALIASES = {
+    "man city": "manchester city", "man united": "manchester united", "man utd": "manchester united",
+    "nottm forest": "nottingham forest", "wolves": "wolverhampton wanderers",
+    "brighton hove albion": "brighton", "brighton and hove albion": "brighton",
+    "espanol": "espanyol",
+    "ath bilbao": "athletic", "athletic bilbao": "athletic",
+    "ath madrid": "atletico madrid",
+    "sp lisbon": "sporting", "sporting lisbon": "sporting", "sporting portugal": "sporting",
+    "sp braga": "braga", "sporting braga": "braga",
+    "guimaraes": "vitoria", "vitoria guimaraes": "vitoria",
+    "bayern munich": "bayern", "bayern munchen": "bayern",
+    "ein frankfurt": "eintracht frankfurt", "mgladbach": "borussia monchengladbach",
+    "paris sg": "paris saint germain", "st etienne": "saint etienne", "rennes": "stade rennais 1901",
+    "inter": "inter", "internazionale milano": "inter",
+}
+
+
+def norm(s):
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower()
+    s = re.sub(r"[^a-z0-9 ]", " ", s.replace("'", ""))
+    s = re.sub(r"\b(fc|cf|sc|cd|afc|sad|club|clube|de|futebol|ac|ud|rc|rcd|ca|sl|gd|cp|and)\b", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def canon(name):
+    k = norm(name)
+    return ALIASES.get(k, k)
+
+
+def match_team(name, candidates, min_score=0.6):
+    nn = canon(name)
+    best, score = None, 0.0
+    for c in candidates:
+        cn = canon(c)
+        if nn and nn == cn:
+            return c
+        r = difflib.SequenceMatcher(None, nn, cn).ratio()
+        if min(len(nn), len(cn)) >= 4 and (nn in cn or cn in nn):
+            r = max(r, 0.85)
+        if r > score:
+            best, score = c, r
+    return best if score >= min_score else None
+
+
 # ---------- dados ----------
-def current_season_start(now):
-    # Na Europa, a época começa em julho/agosto (ex: nov 2026 -> época 2026)
-    return now.year if now.month >= 7 else now.year - 1
-
-
-def fd_matches(code, season=None):
-    params = {"status": "FINISHED"}
-    if season is not None:
-        params["season"] = season
+def fd_matches(code):
     r = requests.get(
         f"https://api.football-data.org/v4/competitions/{code}/matches",
         headers={"X-Auth-Token": FD_KEY},
-        params=params,
+        params={"status": "FINISHED"},
         timeout=30,
     )
-    time.sleep(7)  # limite grátis: 10 pedidos/min
-    if r.status_code in (400, 403, 404) and season is not None:
-        print(f"Aviso: época {season} indisponível no plano atual para {code} (HTTP {r.status_code}).", file=sys.stderr)
-        return []
     r.raise_for_status()
+    time.sleep(7)  # limite grátis: 10 pedidos/min
     return r.json().get("matches", [])
-
-
-def fd_all_history(code, now):
-    """Vai buscar a época atual e tenta buscar épocas anteriores."""
-    matches = fd_matches(code)
-    cur_yr = current_season_start(now)
-    for i in range(1, PAST_SEASONS + 1):
-        old = fd_matches(code, season=cur_yr - i)
-        if old:
-            matches.extend(old)
-    return matches
 
 
 def score90(m):
@@ -124,62 +174,110 @@ def score90(m):
     return None
 
 
-def build_strengths(matches, now):
-    """Calcula forças de ataque e defesa separadas para Casa e Fora com decaimento."""
-    gf_h, ga_h, w_h = {}, {}, {}
-    gf_a, ga_a, w_a = {}, {}, {}
-    tot_h = tot_a = tot_w = 0.0
+def org_hist(matches):
+    out = []
     for m in matches:
         sc = score90(m)
         if sc is None:
             continue
-        ko = parse_iso(m["utcDate"])
-        age_days = max(0.0, (now - ko).total_seconds() / 86400.0)
-        w = 0.5 ** (age_days / HALF_LIFE_DAYS)
+        out.append({"date": parse_iso(m["utcDate"]).date(), "home": m["homeTeam"]["name"],
+                    "away": m["awayTeam"]["name"], "hg": sc[0], "ag": sc[1]})
+    return out
 
-        sh, sa = sc
-        h, a = m["homeTeam"]["name"], m["awayTeam"]["name"]
+
+def season_start(d):
+    return d.year if d.month >= 7 else d.year - 1
+
+
+def co_url(code, year):
+    return f"https://www.football-data.co.uk/mmz4281/{year % 100:02d}{(year + 1) % 100:02d}/{code}.csv"
+
+
+def fetch_season_csv(code, year):
+    """Devolve o caminho do CSV da época (descarrega e guarda em dados/ se ainda não existir)."""
+    path = f"{DATA_DIR}/{code}_{year}.csv"
+    if os.path.exists(path):
+        return path
+    try:
+        r = requests.get(co_url(code, year), timeout=30,
+                         headers={"User-Agent": "Mozilla/5.0 (analista-futebol)"})
+        head = r.content[:1500]
+        if r.status_code == 200 and b"HomeTeam" in head and b"FTHG" in head:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(r.content)
+            print(f"Descarregado: {path}", file=sys.stderr)
+            return path
+        print(f"Não consegui descarregar {path} (HTTP {r.status_code})", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"Não consegui descarregar {path}: {e}", file=sys.stderr)
+    return None
+
+
+def parse_co_date(s):
+    for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+        try:
+            return dt.datetime.strptime(s.strip(), fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def load_prior(code, today):
+    """Jogos das épocas anteriores (nomes da football-data.co.uk)."""
+    out = []
+    cur = season_start(today)
+    for year in range(cur - 1, cur - 1 - PRIOR_SEASONS, -1):
+        path = fetch_season_csv(code, year)
+        if not path:
+            continue
+        with open(path, newline="", encoding="utf-8-sig", errors="replace") as f:
+            for r in csv.DictReader(f):
+                d = parse_co_date(r.get("Date", ""))
+                try:
+                    hg, ag = int(r["FTHG"]), int(r["FTAG"])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if d is None:
+                    continue
+                out.append({"date": d, "home": r["HomeTeam"].strip(), "away": r["AwayTeam"].strip(),
+                            "hg": hg, "ag": ag})
+    return out
+
+
+def map_prior(prior, org_names):
+    """Traduz os nomes das equipas dos CSV para os nomes da football-data.org."""
+    cache = {}
+
+    def mp(n):
+        if n not in cache:
+            cache[n] = match_team(n, org_names, min_score=0.72) or n
+        return cache[n]
+
+    mapped = [{**m, "home": mp(m["home"]), "away": mp(m["away"])} for m in prior]
+    seen = {m["home"] for m in mapped} | {m["away"] for m in mapped}
+    return mapped, sorted(t for t in org_names if t not in seen)
+
+
+def build_strengths(hist, today):
+    gf, ga, n = {}, {}, {}
+    th = ta = ws = 0.0
+    cnt = 0
+    for m in hist:
+        w = 0.5 ** (max(0, (today - m["date"]).days) / HALF_LIFE_DAYS)
+        h, a = m["home"], m["away"]
         for t in (h, a):
-            gf_h.setdefault(t, 0.0); ga_h.setdefault(t, 0.0); w_h.setdefault(t, 0.0)
-            gf_a.setdefault(t, 0.0); ga_a.setdefault(t, 0.0); w_a.setdefault(t, 0.0)
-
-        gf_h[h] += sh * w; ga_h[h] += sa * w; w_h[h] += w
-        gf_a[a] += sa * w; ga_a[a] += sh * w; w_a[a] += w
-        tot_h += sh * w; tot_a += sa * w; tot_w += w
-
-    if tot_w < 10:
+            gf.setdefault(t, 0.0); ga.setdefault(t, 0.0); n.setdefault(t, 0.0)
+        gf[h] += w * m["hg"]; ga[h] += w * m["ag"]; n[h] += w
+        gf[a] += w * m["ag"]; ga[a] += w * m["hg"]; n[a] += w
+        th += w * m["hg"]; ta += w * m["ag"]; ws += w; cnt += 1
+    if cnt < 10 or ws <= 0:
         return None
-    avg_h, avg_a = tot_h / tot_w, tot_a / tot_w
-    att_h, def_h, att_a, def_a = {}, {}, {}, {}
-    for t in w_h:
-        att_h[t] = ((gf_h[t] + SHRINK * avg_h) / (w_h[t] + SHRINK)) / avg_h
-        def_h[t] = ((ga_h[t] + SHRINK * avg_a) / (w_h[t] + SHRINK)) / avg_a
-        att_a[t] = ((gf_a[t] + SHRINK * avg_a) / (w_a[t] + SHRINK)) / avg_a
-        def_a[t] = ((ga_a[t] + SHRINK * avg_h) / (w_a[t] + SHRINK)) / avg_h
-    return {
-        "att_h": att_h, "def_h": def_h, "n_h": w_h,
-        "att_a": att_a, "def_a": def_a, "n_a": w_a,
-        "avg_h": avg_h, "avg_a": avg_a,
-    }
-
-
-def norm(s):
-    s = s.lower()
-    s = re.sub(r"\b(fc|cf|sc|cd|afc|sad|club|clube|de|futebol|sporting clube|ac|as|us|ss|ssc|tsv|vfl|vfb|fsv|rb|ogc|osc|aj|rc)\b", " ", s)
-    return re.sub(r"[^a-z0-9 ]", "", s).strip()
-
-
-def match_team(name, candidates):
-    nn = norm(name)
-    best, score = None, 0
-    for c in candidates:
-        cn = norm(c)
-        r = difflib.SequenceMatcher(None, nn, cn).ratio()
-        if nn in cn or cn in nn:
-            r = max(r, 0.85)
-        if r > score:
-            best, score = c, r
-    return best if score >= 0.6 else None
+    avg_h, avg_a = th / ws, ta / ws
+    avg_team = (avg_h + avg_a) / 2
+    att = {t: ((gf[t] + SHRINK * avg_team) / (n[t] + SHRINK)) / avg_team for t in n}
+    dfn = {t: ((ga[t] + SHRINK * avg_team) / (n[t] + SHRINK)) / avg_team for t in n}
+    return {"att": att, "def": dfn, "n": n, "avg_h": avg_h, "avg_a": avg_a}
 
 
 def odds_events(sport):
@@ -203,8 +301,8 @@ def pois(k, lam):
 
 
 def predict(st, home, away):
-    lh = st["att_h"][home] * st["def_a"][away] * st["avg_h"]
-    la = st["att_a"][away] * st["def_h"][home] * st["avg_a"]
+    lh = st["att"][home] * st["def"][away] * st["avg_h"]
+    la = st["att"][away] * st["def"][home] * st["avg_a"]
     p = {"H": 0, "D": 0, "A": 0, "O25": 0, "BTTS": 0}
     for i in range(MAX_GOALS + 1):
         for j in range(MAX_GOALS + 1):
@@ -221,53 +319,101 @@ def predict(st, home, away):
     return p
 
 
-def pick_book(event):
-    books = event.get("bookmakers", [])
-    for b in books:
+# ---------- mercado ----------
+def devig(odds):
+    q = [1 / o for o in odds]
+    s = sum(q)
+    return tuple(x / s for x in q)
+
+
+def consensus(ev):
+    """Média, entre casas, das probabilidades sem a margem (1X2 e +2.5 golos)."""
+    h2h, tot = [], []
+    for b in ev.get("bookmakers", []):
+        for mk in b["markets"]:
+            if mk["key"] == "h2h":
+                d = {o["name"]: o["price"] for o in mk["outcomes"]}
+                ph, pa, pd_ = d.get(ev["home_team"]), d.get(ev["away_team"]), d.get("Draw")
+                if ph and pa and pd_:
+                    h2h.append(devig((ph, pd_, pa)))
+            elif mk["key"] == "totals":
+                ov = un = None
+                for o in mk["outcomes"]:
+                    if o.get("point") == 2.5:
+                        if o["name"] == "Over": ov = o["price"]
+                        elif o["name"] == "Under": un = o["price"]
+                if ov and un:
+                    tot.append(devig((ov, un))[0])
+    res = {"h2h": None, "o25": None, "n": len(h2h), "nt": len(tot)}
+    if h2h:
+        res["h2h"] = tuple(sum(x[i] for x in h2h) / len(h2h) for i in range(3))  # H, D, A
+    if tot:
+        res["o25"] = sum(tot) / len(tot)
+    return res
+
+
+def pick_odds(ev):
+    """Melhor odd por seleção, dando prioridade à casa preferida (Betclic) quando existe."""
+    pref, best = {}, {}
+
+    def upd(sel, price, b):
+        if sel not in best or price > best[sel][0]:
+            best[sel] = (price, b["title"])
         if b["key"] == BOOKMAKER:
-            return b
-    return books[0] if books else None
+            pref[sel] = (price, b["title"])
+
+    for b in ev.get("bookmakers", []):
+        for mk in b["markets"]:
+            if mk["key"] == "h2h":
+                for o in mk["outcomes"]:
+                    sel = "H" if o["name"] == ev["home_team"] else "A" if o["name"] == ev["away_team"] else "D"
+                    upd(sel, o["price"], b)
+            elif mk["key"] == "totals":
+                for o in mk["outcomes"]:
+                    if o.get("point") == 2.5:
+                        upd("O" if o["name"] == "Over" else "U", o["price"], b)
+    return {sel: pref.get(sel) or best[sel] for sel in best}
 
 
 def analyse_event(ev, st):
-    home = match_team(ev["home_team"], st["att_h"].keys())
-    away = match_team(ev["away_team"], st["att_a"].keys())
-    book = pick_book(ev)
-    if not home or not away or not book:
+    home = match_team(ev["home_team"], st["att"].keys())
+    away = match_team(ev["away_team"], st["att"].keys())
+    if not home or not away or not ev.get("bookmakers"):
         return None
     p = predict(st, home, away)
-    min_w = min(st["n_h"][home], st["n_a"][away])
-    conf = "alta" if min_w >= 8 else ("média" if min_w >= MIN_GAMES else "baixa")
+    model = (p["H"], p["D"], p["A"])
+    mk = consensus(ev)
+    w = model_weight(mk["n"])
+    if mk["h2h"]:
+        final = tuple(w * a + (1 - w) * b for a, b in zip(model, mk["h2h"]))
+    else:
+        final = model
+    wt = model_weight(mk["nt"])
+    final_o = wt * p["O25"] + (1 - wt) * mk["o25"] if mk["o25"] is not None else p["O25"]
+    nmin = min(st["n"][home], st["n"][away])
+    conf = "alta" if nmin >= 10 else ("média" if nmin >= MIN_GAMES else "baixa")
+
+    labels = {"H": f"Vitória {ev['home_team']}", "D": "Empate", "A": f"Vitória {ev['away_team']}",
+              "O": "Mais de 2.5 golos", "U": "Menos de 2.5 golos"}
+    prob = {"H": (final[0], model[0], mk["h2h"][0] if mk["h2h"] else None),
+            "D": (final[1], model[1], mk["h2h"][1] if mk["h2h"] else None),
+            "A": (final[2], model[2], mk["h2h"][2] if mk["h2h"] else None),
+            "O": (final_o, p["O25"], mk["o25"]),
+            "U": (1 - final_o, 1 - p["O25"], 1 - mk["o25"] if mk["o25"] is not None else None)}
     picks = []
-    for mk in book["markets"]:
-        if mk["key"] == "h2h":
-            for o in mk["outcomes"]:
-                if o["name"] == ev["home_team"]: key, lab = "H", f"Vitória {ev['home_team']}"
-                elif o["name"] == ev["away_team"]: key, lab = "A", f"Vitória {ev['away_team']}"
-                else: key, lab = "D", "Empate"
-                picks.append((lab, p[key], o["price"], key))
-        elif mk["key"] == "totals":
-            for o in mk["outcomes"]:
-                if o.get("point") != 2.5:
-                    continue
-                over = o["name"] == "Over"
-                po = p["O25"] if over else 1 - p["O25"]
-                lab = "Mais de 2.5 golos" if over else "Menos de 2.5 golos"
-                picks.append((lab, po, o["price"], "O" if over else "U"))
-    good = []
-    for lab, prob, odd, sel in picks:
-        edge = prob * odd - 1
-        imp_prob = 1.0 / odd if odd > 0 else 0.0
+    for sel, (odd, book) in pick_odds(ev).items():
+        pf, pm, pk = prob[sel]
+        edge = pf * odd - 1
         if MIN_EDGE <= edge <= MAX_EDGE and MIN_ODD <= odd <= MAX_ODD:
-            good.append({
-                "label": lab, "prob": prob, "imp_prob": imp_prob,
-                "odd": odd, "edge": edge, "sel": sel
-            })
+            picks.append({"label": labels[sel], "sel": sel, "odd": odd, "book": book,
+                          "prob": pf, "p_model": pm, "p_market": pk, "edge": edge})
     return {
         "id": ev.get("id") or f"{ev['home_team']}|{ev['away_team']}|{ev['commence_time']}",
         "home": ev["home_team"], "away": ev["away_team"], "time": ev["commence_time"],
         "fd_home": home, "fd_away": away,
-        "p": p, "conf": conf, "book": book["title"], "picks": good,
+        "p": p, "model": model, "market": mk["h2h"], "final": final, "final_o": final_o,
+        "nb": mk["n"], "conf": conf, "picks": picks,
+        "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
     }
 
 
@@ -288,7 +434,6 @@ def write_csv(path, fields, rows):
 
 
 def add_index(idx, matches):
-    """Índice (casa, fora) -> [(início, golos casa, golos fora)] dos jogos terminados."""
     for m in matches:
         sc = score90(m)
         if sc is None:
@@ -314,7 +459,6 @@ def outcome(sel, gh, ga):
 
 
 def settle(picks, preds, idx, now):
-    """Marca sugestões/previsões pendentes cujo jogo já terminou. Devolve as sugestões resolvidas agora."""
     newly = []
     for r in picks:
         if r["estado"] != "pendente":
@@ -348,7 +492,6 @@ def settle(picks, preds, idx, now):
 
 
 def log_new(picks, preds, all_results, shown, now):
-    """Regista previsões (todos os jogos analisados) e sugestões (só as mostradas)."""
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     by_id = {r["id"]: r for r in preds}
     for league, games in all_results.items():
@@ -357,21 +500,23 @@ def log_new(picks, preds, all_results, shown, now):
             vals = {
                 "pH": f"{p['H']:.4f}", "pD": f"{p['D']:.4f}", "pA": f"{p['A']:.4f}",
                 "pO25": f"{p['O25']:.4f}", "pBTTS": f"{p['BTTS']:.4f}",
-                "xg_casa": f"{p['lh']:.2f}", "xg_fora": f"{p['la']:.2f}",
+                "fH": f"{g['final'][0]:.4f}", "fD": f"{g['final'][1]:.4f}", "fA": f"{g['final'][2]:.4f}",
+                "mH": f"{g['market'][0]:.4f}" if g["market"] else "",
+                "mD": f"{g['market'][1]:.4f}" if g["market"] else "",
+                "mA": f"{g['market'][2]:.4f}" if g["market"] else "",
+                "nb": g["nb"], "xg_casa": f"{p['lh']:.2f}", "xg_fora": f"{p['la']:.2f}",
                 "confianca": g["conf"], "inicio_utc": g["time"],
             }
             old = by_id.get(g["id"])
             if old is None:
-                row = {
-                    "id": g["id"], "enviado_em": stamp, "liga": league,
-                    "casa": g["home"], "fora": g["away"],
-                    "fd_casa": g["fd_home"], "fd_fora": g["fd_away"],
-                    "estado": "pendente", **vals,
-                }
+                row = {"id": g["id"], "enviado_em": stamp, "liga": league,
+                       "casa": g["home"], "fora": g["away"],
+                       "fd_casa": g["fd_home"], "fd_fora": g["fd_away"],
+                       "estado": "pendente", **vals}
                 preds.append(row)
                 by_id[g["id"]] = row
             elif old["estado"] == "pendente":
-                old.update(vals)  # mantém a previsão mais recente antes do jogo
+                old.update(vals)
     have = {(r["id"], r["selecao"]) for r in picks}
     for league, games in shown.items():
         for g in games:
@@ -383,9 +528,10 @@ def log_new(picks, preds, all_results, shown, now):
                     "casa": g["home"], "fora": g["away"],
                     "fd_casa": g["fd_home"], "fd_fora": g["fd_away"],
                     "inicio_utc": g["time"], "sugestao": pk["label"], "selecao": pk["sel"],
-                    "odd": f"{pk['odd']:.2f}", "prob_modelo": f"{pk['prob']:.4f}",
-                    "vantagem": f"{pk['edge']:.4f}", "confianca": g["conf"],
-                    "casa_apostas": g["book"], "estado": "pendente",
+                    "odd": f"{pk['odd']:.2f}", "prob_modelo": f"{pk['p_model']:.4f}",
+                    "prob_mercado": f"{pk['p_market']:.4f}" if pk["p_market"] is not None else "",
+                    "prob_final": f"{pk['prob']:.4f}", "vantagem": f"{pk['edge']:.4f}",
+                    "confianca": g["conf"], "casa_apostas": pk["book"], "estado": "pendente",
                 })
                 have.add((g["id"], pk["sel"]))
 
@@ -395,12 +541,8 @@ def esc(s):
     return html.escape(str(s))
 
 
-def to_lisbon(iso):
-    return parse_iso(iso).astimezone(LISBON)
-
-
 def fmt_time(iso):
-    t = to_lisbon(iso)
+    t = parse_iso(iso).astimezone(LISBON)
     return f"{DIAS_C[t.weekday()]} {t:%d/%m} · {t:%H:%M}"
 
 
@@ -413,18 +555,35 @@ def conf_txt(c):
     return {"alta": "🟢 alta", "média": "🟡 média", "baixa": "🔴 baixa"}[c]
 
 
+def pct3(t):
+    return "/".join(f"{x:.0%}".rstrip("%") for x in t) + "%"
+
+
 def game_block(g):
-    p = g["p"]
-    return "\n".join([
+    p, f = g["p"], g["final"]
+    lines = [
         f"🕗 <i>{fmt_time(g['time'])}</i>",
         f"<b>{esc(g['home'])}</b> vs <b>{esc(g['away'])}</b>",
-        f"{bar(p['H'])} {p['H']:.0%} 🏠 {esc(g['home'])}",
-        f"{bar(p['D'])} {p['D']:.0%} 🤝 Empate",
-        f"{bar(p['A'])} {p['A']:.0%} ✈️ {esc(g['away'])}",
-        f"⚽ Golos esperados: {p['lh']:.1f} – {p['la']:.1f}",
-        f"📈 +2.5 golos: {p['O25']:.0%} · Ambas marcam: {p['BTTS']:.0%}",
-        f"🔎 Confiança: {conf_txt(g['conf'])}",
-    ])
+        f"{bar(f[0])} {f[0]:.0%} 🏠 {esc(g['home'])}",
+        f"{bar(f[1])} {f[1]:.0%} 🤝 Empate",
+        f"{bar(f[2])} {f[2]:.0%} ✈️ {esc(g['away'])}",
+    ]
+    if g["market"]:
+        lines.append(f"🧠 Modelo {pct3(g['model'])} · 🏦 Mercado {pct3(g['market'])}")
+    else:
+        lines.append(f"🧠 Modelo {pct3(g['model'])} · 🏦 sem mercado")
+    lines += [
+        f"⚽ Golos esperados: {p['lh']:.1f} – {p['la']:.1f} · +2.5: {g['final_o']:.0%} · Ambas marcam: {p['BTTS']:.0%}",
+        f"🔎 Confiança: {conf_txt(g['conf'])} · 📚 {g['nb']} casa(s)",
+    ]
+    return "\n".join(lines)
+
+
+def fav_label(g):
+    f = g["final"]
+    i = max(range(3), key=lambda k: f[k])
+    name = (g["home"], "Empate", g["away"])[i]
+    return name, f[i]
 
 
 def history_blocks(picks, preds, newly):
@@ -447,15 +606,32 @@ def history_blocks(picks, preds, newly):
     lost = [r for r in picks if r["estado"] == "sem_resultado"]
     rp = [r for r in preds if r["estado"] == "resolvida"]
     lines = ["📊 <b>DESEMPENHO DO BOT</b>", ""]
+
+    def trio(r, a, b, c):
+        v = (fnum(r.get(a)), fnum(r.get(b)), fnum(r.get(c)))
+        return v if None not in v else None
+
+    def stats(rows, keys):
+        """Brier e acerto do resultado mais provável; keys = ('pH','pD','pA') etc."""
+        brier = hit = n = 0
+        for r in rows:
+            p = trio(r, *keys)
+            if p is None:
+                continue
+            gh, ga = int(r["golos_casa"]), int(r["golos_fora"])
+            y = (float(gh > ga), float(gh == ga), float(gh < ga))
+            brier += sum((a - b) ** 2 for a, b in zip(p, y))
+            hit += y[p.index(max(p))]
+            n += 1
+        return (brier / n, hit / n, n) if n else None
+
     if res:
         n = len(res)
         wins = sum(1 for r in res if r["estado"] == "ganha")
         profit = sum(float(r["lucro"]) for r in res)
-        avg_p = sum(float(r["prob_modelo"]) for r in res) / n
         lines += [
             f"🎯 Sugestões resolvidas: {n} · acertou {wins} ({wins / n:.0%})",
             f"💶 Com 1 unidade por sugestão: <b>{profit:+.2f}</b> (ROI {profit / n:+.0%})",
-            f"🧮 Probabilidade média do modelo {avg_p:.0%} vs acertos reais {wins / n:.0%}",
         ]
     else:
         lines.append("Ainda sem sugestões resolvidas.")
@@ -464,22 +640,29 @@ def history_blocks(picks, preds, newly):
     if lost:
         lines.append(f"❓ Sem resultado encontrado: {len(lost)} (pode ser nome de equipa por emparelhar)")
     if rp:
-        hit = brier = 0.0
-        for r in rp:
-            ph, pd_, pa = float(r["pH"]), float(r["pD"]), float(r["pA"])
-            gh, ga = int(r["golos_casa"]), int(r["golos_fora"])
-            yh, yd, ya = float(gh > ga), float(gh == ga), float(gh < ga)
-            brier += (ph - yh) ** 2 + (pd_ - yd) ** 2 + (pa - ya) ** 2
-            top = max((ph, "H"), (pd_, "D"), (pa, "A"))[1]
-            hit += 1.0 if (top == "H" and yh) or (top == "D" and yd) or (top == "A" and ya) else 0.0
-        m = len(rp)
-        lines.append(
-            f"🔮 Previsões 1X2 avaliadas: {m} · resultado mais provável acertou "
-            f"{hit / m:.0%} · erro de Brier {brier / m:.3f}"
-        )
-        lines.append("<i>Brier: quanto mais baixo, melhor (0.667 equivale a chutar).</i>")
+        sm = stats(rp, ("pH", "pD", "pA"))
+        sk = stats(rp, ("mH", "mD", "mA"))
+        sf = stats(rp, ("fH", "fD", "fA"))
+        if sf:
+            lines.append(f"🔮 Previsões 1X2 avaliadas: {sf[2]} · resultado mais provável acertou {sf[1]:.0%}")
+            lines.append(f"📐 Erro de Brier (mais baixo = melhor): bot {sf[0]:.3f}"
+                         + (f" · modelo {sm[0]:.3f}" if sm else "")
+                         + (f" · mercado {sk[0]:.3f}" if sk else ""))
+        elif sm:
+            lines.append(f"🔮 Previsões 1X2 avaliadas: {sm[2]} · resultado mais provável acertou {sm[1]:.0%} · Brier {sm[0]:.3f}")
+        fav = [r for r in rp if (trio(r, "fH", "fD", "fA") or trio(r, "pH", "pD", "pA")) and
+               max(trio(r, "fH", "fD", "fA") or trio(r, "pH", "pD", "pA")) >= CLEAR_FAV]
+        if fav:
+            ok = 0
+            for r in fav:
+                p = trio(r, "fH", "fD", "fA") or trio(r, "pH", "pD", "pA")
+                gh, ga = int(r["golos_casa"]), int(r["golos_fora"])
+                y = (gh > ga, gh == ga, gh < ga)
+                ok += 1 if y[p.index(max(p))] else 0
+            lines.append(f"⭐ Favoritos claros (≥{CLEAR_FAV:.0%}): {len(fav)} jogos · acertou {ok / len(fav):.0%}")
+        lines.append("<i>Brier: 0.667 equivale a chutar; o mercado costuma ficar perto de 0.57.</i>")
     if len(res) < MIN_SAMPLE:
-        lines.append(f"⚠️ <i>Amostra pequena ({len(res)}): só é fiável a partir de {MIN_SAMPLE}+ sugestões resolvidas.</i>")
+        lines.append(f"⚠️ <i>Amostra pequena ({len(res)} sugestões): só é fiável a partir de {MIN_SAMPLE}+.</i>")
     blocks.append("\n".join(lines))
     return blocks
 
@@ -494,6 +677,16 @@ def build_blocks(results, fallback, extra=None):
     if fallback:
         blocks.append(f"ℹ️ <i>Sem jogos nas próximas {HOURS_AHEAD}h nas ligas seguidas "
                       "(pausa de seleções?). A mostrar os próximos jogos.</i>")
+    all_games = [g for games in results.values() for g in games]
+    favs = sorted((g for g in all_games if fav_label(g)[1] >= CLEAR_FAV),
+                  key=lambda g: -fav_label(g)[1])
+    if favs:
+        lines = ["⭐ <b>FAVORITOS CLAROS</b>",
+                 "<i>Nos testes, favoritos com 60% ou mais ganharam cerca de 72% das vezes.</i>", ""]
+        for g in favs[:6]:
+            name, pr = fav_label(g)
+            lines.append(f"• <b>{esc(name)}</b> {pr:.0%} — {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}")
+        blocks.append("\n".join(lines))
     all_picks, books = [], set()
     for league, games in results.items():
         if not games:
@@ -501,33 +694,37 @@ def build_blocks(results, fallback, extra=None):
         blocks.append(f"🏆 <b>{esc(league.upper())}</b>")
         for g in games:
             blocks.append(game_block(g))
-            books.add(g["book"])
+            books.update(g["books"])
             for pk in g["picks"]:
                 all_picks.append((pk["edge"], g, pk))
-    if not any(results.values()):
+    if not all_games:
         blocks.append("Sem jogos analisados nos próximos dias.")
     all_picks.sort(key=lambda x: -x[0])
-    head = "🎯 <b>ONDE O MODELO DISCORDA DO MERCADO</b>"
+    head = "🔎 <b>ODDS ACIMA DO CONSENSO</b>"
+    note = ("<i>Odds que pagam mais do que a previsão final sugere. Num teste de 2 épocas, "
+            "este tipo de sinal não deu lucro: serve para investigar, não para apostar.</i>")
     if not all_picks:
-        blocks.append(head + "\nNenhuma discordância relevante. Não apostar também é uma decisão. 🧘")
+        blocks.append(head + "\nNenhuma odd claramente acima do consenso hoje. 🧘")
     else:
-        lines = [head, ""]
-        for i, (edge, g, pk) in enumerate(all_picks[:6]):
-            warn = "\n   ⚠️ <i>Diferença muito alta: desconfia, o modelo pode estar errado.</i>" \
+        lines = [head, note, ""]
+        for i, (edge, g, pk) in enumerate(all_picks[:5]):
+            warn = "\n   ⚠️ <i>Diferença grande: desconfia, pode ser erro do modelo ou odd desatualizada.</i>" \
                 if edge > WARN_EDGE else ""
+            pm = f"{pk['p_market']:.0%}" if pk["p_market"] is not None else "–"
             lines.append(
-                f"{NUMS[i]} <b>{esc(pk['label'])}</b> @ <b>{pk['odd']:.2f}</b>\n"
+                f"{NUMS[i]} <b>{esc(pk['label'])}</b> @ <b>{pk['odd']:.2f}</b> ({esc(pk['book'])})\n"
                 f"   {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}\n"
-                f"   📊 Modelo {pk['prob']:.0%} vs Mercado {pk['imp_prob']:.0%} "
-                f"(dif. <b>{edge:+.0%}</b>) · {conf_txt(g['conf'])}{warn}"
+                f"   📊 Previsão {pk['prob']:.0%} (modelo {pk['p_model']:.0%} · mercado {pm}) · "
+                f"diferença <b>{edge:+.0%}</b>{warn}"
             )
         blocks.append("\n".join(lines))
     if extra:
         blocks.extend(extra)
     if books:
-        blocks.append("📚 Odds: " + esc(", ".join(sorted(books))))
+        blocks.append("📚 Odds de: " + esc(", ".join(sorted(books))))
     blocks.append(
-        "ℹ️ <i>Diferença = quanto a odd paga a mais do que o modelo estima (não garante lucro).</i>\n"
+        "ℹ️ <i>Previsão final = sobretudo o consenso do mercado, com um toque do modelo "
+        "(nos testes, o mercado sozinho foi o melhor previsor).</i>\n"
         "⚠️ <i>Estimativa estatística, não garantia. Aposta com responsabilidade.</i>"
     )
     return blocks
@@ -584,14 +781,27 @@ def telegram(blocks):
 
 def main(now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
+    today = now.date()
     near = now + dt.timedelta(hours=HOURS_AHEAD)
     far = now + dt.timedelta(hours=FALLBACK_HOURS)
     results, idx = {}, {}
     for code, (name, sport) in LEAGUES.items():
         try:
-            matches = fd_all_history(code, now)
+            matches = fd_matches(code)
             add_index(idx, matches)
-            st = build_strengths(matches, now)
+            cur_hist = org_hist(matches)
+            prior = []
+            if code in CO_UK:
+                try:
+                    org_names = {m["home"] for m in cur_hist} | {m["away"] for m in cur_hist}
+                    prior, sem_prior = map_prior(load_prior(CO_UK[code], today), org_names)
+                    print(f"{name}: {len(cur_hist)} jogos da época + {len(prior)} de épocas anteriores"
+                          + (f" | sem histórico anterior: {', '.join(sem_prior)}" if sem_prior else ""),
+                          file=sys.stderr)
+                except Exception as e:  # noqa: BLE001
+                    print(f"{name}: épocas anteriores indisponíveis ({e})", file=sys.stderr)
+                    prior = []
+            st = build_strengths(prior + cur_hist, today)
             if not st:
                 print("Poucos dados:", name, file=sys.stderr)
                 continue
@@ -602,8 +812,10 @@ def main(now=None):
                     continue
                 g = analyse_event(ev, st)
                 if g:
-                    g["league"] = name
                     games.append(g)
+                else:
+                    print(f"{name}: jogo sem emparelhar equipas: {ev['home_team']} vs {ev['away_team']}",
+                          file=sys.stderr)
             games.sort(key=lambda g: g["time"])
             results[name] = games
         except Exception as e:  # noqa: BLE001
