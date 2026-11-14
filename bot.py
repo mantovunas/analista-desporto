@@ -1,8 +1,9 @@
-"""Analista diário de futebol -> Telegram (versão 4: épocas anteriores + mercado).
+"""Analista diário de futebol -> Telegram (versão 5: forças separadas Casa/Fora).
 
 Fluxo: resultados da época atual e anteriores com decaimento (football-data.org) ->
-modelo de Poisson -> probabilidades 1X2 / Over-Under 2.5 / BTTS -> compara com odds
-(The Odds API) -> envia discordâncias para o Telegram e guarda histórico em CSV.
+modelo de Poisson com forças separadas em casa e fora -> probabilidades 1X2 /
+Over-Under 2.5 / BTTS -> compara com odds (The Odds API) -> envia discordâncias
+para o Telegram e guarda histórico em CSV.
 """
 import os
 import re
@@ -40,8 +41,8 @@ MIN_EDGE = 0.05        # vantagem mínima (5%) para destacar
 MAX_EDGE = 0.30        # acima disto desconfia-se do modelo
 WARN_EDGE = 0.15       # acima disto avisa que a diferença parece exagerada
 MIN_ODD, MAX_ODD = 1.40, 6.00
-MIN_GAMES = 4          # jogos mínimos (pesados) por equipa para confiar
-SHRINK = 3             # "jogos fictícios" na média, evita extremos
+MIN_GAMES = 3          # jogos mínimos (pesados) por recinto (casa ou fora)
+SHRINK = 4             # "jogos fictícios" por recinto, evita extremos com amostras menores
 HALF_LIFE_DAYS = 365.0 # um jogo de há 1 ano vale metade de um jogo de hoje
 PAST_SEASONS = 2       # tenta ir buscar até 2 épocas anteriores
 MAX_GOALS = 10
@@ -120,7 +121,9 @@ def score90(m):
 
 
 def build_strengths(matches, now):
-    gf, ga, w_sum = {}, {}, {}
+    """Calcula forças de ataque e defesa separadas para Casa e Fora com decaimento."""
+    gf_h, ga_h, w_h = {}, {}, {}
+    gf_a, ga_a, w_a = {}, {}, {}
     tot_h = tot_a = tot_w = 0.0
     for m in matches:
         sc = score90(m)
@@ -129,24 +132,31 @@ def build_strengths(matches, now):
         ko = parse_iso(m["utcDate"])
         age_days = max(0.0, (now - ko).total_seconds() / 86400.0)
         w = 0.5 ** (age_days / HALF_LIFE_DAYS)
-        
+
         sh, sa = sc
         h, a = m["homeTeam"]["name"], m["awayTeam"]["name"]
         for t in (h, a):
-            gf.setdefault(t, 0.0); ga.setdefault(t, 0.0); w_sum.setdefault(t, 0.0)
-        gf[h] += sh * w; ga[h] += sa * w; w_sum[h] += w
-        gf[a] += sa * w; ga[a] += sh * w; w_sum[a] += w
+            gf_h.setdefault(t, 0.0); ga_h.setdefault(t, 0.0); w_h.setdefault(t, 0.0)
+            gf_a.setdefault(t, 0.0); ga_a.setdefault(t, 0.0); w_a.setdefault(t, 0.0)
+
+        gf_h[h] += sh * w; ga_h[h] += sa * w; w_h[h] += w
+        gf_a[a] += sa * w; ga_a[a] += sh * w; w_a[a] += w
         tot_h += sh * w; tot_a += sa * w; tot_w += w
 
     if tot_w < 10:
         return None
     avg_h, avg_a = tot_h / tot_w, tot_a / tot_w
-    avg_team = (avg_h + avg_a) / 2
-    att, dfn = {}, {}
-    for t in w_sum:
-        att[t] = ((gf[t] + SHRINK * avg_team) / (w_sum[t] + SHRINK)) / avg_team
-        dfn[t] = ((ga[t] + SHRINK * avg_team) / (w_sum[t] + SHRINK)) / avg_team
-    return {"att": att, "def": dfn, "n": w_sum, "avg_h": avg_h, "avg_a": avg_a}
+    att_h, def_h, att_a, def_a = {}, {}, {}, {}
+    for t in w_h:
+        att_h[t] = ((gf_h[t] + SHRINK * avg_h) / (w_h[t] + SHRINK)) / avg_h
+        def_h[t] = ((ga_h[t] + SHRINK * avg_a) / (w_h[t] + SHRINK)) / avg_a
+        att_a[t] = ((gf_a[t] + SHRINK * avg_a) / (w_a[t] + SHRINK)) / avg_a
+        def_a[t] = ((ga_a[t] + SHRINK * avg_h) / (w_a[t] + SHRINK)) / avg_h
+    return {
+        "att_h": att_h, "def_h": def_h, "n_h": w_h,
+        "att_a": att_a, "def_a": def_a, "n_a": w_a,
+        "avg_h": avg_h, "avg_a": avg_a,
+    }
 
 
 def norm(s):
@@ -189,8 +199,8 @@ def pois(k, lam):
 
 
 def predict(st, home, away):
-    lh = st["att"][home] * st["def"][away] * st["avg_h"]
-    la = st["att"][away] * st["def"][home] * st["avg_a"]
+    lh = st["att_h"][home] * st["def_a"][away] * st["avg_h"]
+    la = st["att_a"][away] * st["def_h"][home] * st["avg_a"]
     p = {"H": 0, "D": 0, "A": 0, "O25": 0, "BTTS": 0}
     for i in range(MAX_GOALS + 1):
         for j in range(MAX_GOALS + 1):
@@ -216,14 +226,14 @@ def pick_book(event):
 
 
 def analyse_event(ev, st):
-    home = match_team(ev["home_team"], st["att"].keys())
-    away = match_team(ev["away_team"], st["att"].keys())
+    home = match_team(ev["home_team"], st["att_h"].keys())
+    away = match_team(ev["away_team"], st["att_a"].keys())
     book = pick_book(ev)
     if not home or not away or not book:
         return None
     p = predict(st, home, away)
-    min_w = min(st["n"][home], st["n"][away])
-    conf = "alta" if min_w >= 10 else ("média" if min_w >= MIN_GAMES else "baixa")
+    min_w = min(st["n_h"][home], st["n_a"][away])
+    conf = "alta" if min_w >= 8 else ("média" if min_w >= MIN_GAMES else "baixa")
     picks = []
     for mk in book["markets"]:
         if mk["key"] == "h2h":
