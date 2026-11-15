@@ -2,7 +2,12 @@ name: analista-futebol
 
 on:
   schedule:
-    - cron: "17 9 * * *"   # 9h17 UTC = 9h17 em Lisboa no inverno; no verão usa "17 8 * * *"
+    # Horas em UTC (Lisboa no inverno). Várias tentativas porque o GitHub atrasa; o bot só envia 1x por dia.
+    # No verão (hora de Lisboa = UTC+1) subtrai 1 hora a cada uma.
+    - cron: "17 9 * * *"
+    - cron: "47 10 * * *"
+    - cron: "17 12 * * *"
+    - cron: "17 15 * * *"
   workflow_dispatch:       # botão para correr manualmente
 
 permissions:
