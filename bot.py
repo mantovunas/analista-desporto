@@ -779,8 +779,32 @@ def telegram(blocks):
         r.raise_for_status()
 
 
+SENT_FILE = f"{HIST_DIR}/ultimo_envio.txt"
+
+
+def already_sent_today(now):
+    try:
+        with open(SENT_FILE, encoding="utf-8") as f:
+            return f.read().strip() == now.astimezone(LISBON).date().isoformat()
+    except OSError:
+        return False
+
+
+def mark_sent(now):
+    try:
+        os.makedirs(HIST_DIR, exist_ok=True)
+        with open(SENT_FILE, "w", encoding="utf-8") as f:
+            f.write(now.astimezone(LISBON).date().isoformat())
+    except OSError as e:
+        print("Não consegui gravar ultimo_envio:", e, file=sys.stderr)
+
+
 def main(now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
+    # Execuções automáticas repetidas (rede de segurança contra atrasos do GitHub): só envia 1x por dia.
+    if os.getenv("GITHUB_EVENT_NAME") == "schedule" and already_sent_today(now):
+        print("Já enviado hoje; nada a fazer.", file=sys.stderr)
+        return
     today = now.date()
     near = now + dt.timedelta(hours=HOURS_AHEAD)
     far = now + dt.timedelta(hours=FALLBACK_HOURS)
@@ -848,6 +872,7 @@ def main(now=None):
     if summary:
         blocks.insert(len(blocks) - 1, summary)
     telegram(blocks)
+    mark_sent(now)
 
 
 if __name__ == "__main__":
