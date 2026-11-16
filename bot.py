@@ -580,42 +580,35 @@ def pct3(t):
     return "/".join(f"{x:.0%}".rstrip("%") for x in t) + "%"
 
 
-def game_block_market(g):
-    f = g["final"]
-    lines = [
-        f"🕗 <i>{fmt_time(g['time'])}</i>",
-        f"<b>{esc(g['home'])}</b> vs <b>{esc(g['away'])}</b>",
-        f"{bar(f[0])} {f[0]:.0%} 🏠 {esc(g['home'])}",
-        f"{bar(f[1])} {f[1]:.0%} 🤝 Empate",
-        f"{bar(f[2])} {f[2]:.0%} ✈️ {esc(g['away'])}",
-        "🏦 Só mercado (sem modelo fiável nesta competição)"
-        + (f" · +2.5 golos: {g['final_o']:.0%}" if g["final_o"] is not None else ""),
-        f"📚 {g['nb']} casa(s) · " + ("✅ Betclic disponível" if g["has_pref"] else "➖ sem Betclic"),
-    ]
-    return "\n".join(lines)
+LEAGUE_ICON = {"Liga Portugal": "🇵🇹", "Premier League": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
+               "La Liga": "🇪🇸", "Serie A": "🇮🇹", "Bundesliga": "🇩🇪", "Ligue 1": "🇫🇷",
+               "Champions League": "⭐", "Liga das Nações": "🌍"}
+
+
+def probs_line(f):
+    """Uma linha com a barra do resultado mais provável e as 3 probabilidades."""
+    top = max(f)
+    return f"{bar(top)}  🏠 {f[0]:.0%}  🤝 {f[1]:.0%}  ✈️ {f[2]:.0%}"
 
 
 def game_block(g):
+    f = g["final"]
+    head = [f"🕗 <i>{fmt_time(g['time'])}</i>", f"<b>{esc(g['home'])}</b> vs <b>{esc(g['away'])}</b>", probs_line(f)]
+    pref = "✅ Betclic" if g["has_pref"] else "➖ sem Betclic"
     if g.get("market_only"):
-        return game_block_market(g)
-    p, f = g["p"], g["final"]
-    lines = [
-        f"🕗 <i>{fmt_time(g['time'])}</i>",
-        f"<b>{esc(g['home'])}</b> vs <b>{esc(g['away'])}</b>",
-        f"{bar(f[0])} {f[0]:.0%} 🏠 {esc(g['home'])}",
-        f"{bar(f[1])} {f[1]:.0%} 🤝 Empate",
-        f"{bar(f[2])} {f[2]:.0%} ✈️ {esc(g['away'])}",
-    ]
-    if g["market"]:
-        lines.append(f"🧠 Modelo {pct3(g['model'])} · 🏦 Mercado {pct3(g['market'])}")
+        extra = f" · +2.5: {g['final_o']:.0%}" if g["final_o"] is not None else ""
+        head.append(f"🏦 Só mercado{extra}")
+        detail = f"📚 {g['nb']} casa(s) · {pref}\n(sem modelo fiável nesta competição)"
     else:
-        lines.append(f"🧠 Modelo {pct3(g['model'])} · 🏦 sem mercado")
-    lines += [
-        f"⚽ Golos esperados: {p['lh']:.1f} – {p['la']:.1f} · +2.5: {g['final_o']:.0%} · Ambas marcam: {p['BTTS']:.0%}",
-        f"🔎 Confiança: {conf_txt(g['conf'])} · 📚 {g['nb']} casa(s) · "
-        + ("✅ Betclic disponível" if g["has_pref"] else "➖ sem Betclic"),
-    ]
-    return "\n".join(lines)
+        p = g["p"]
+        head.append(f"⚽ {p['lh']:.1f}–{p['la']:.1f} · +2.5: {g['final_o']:.0%} · {conf_txt(g['conf'])}")
+        mk = pct3(g["market"]) if g["market"] else "sem mercado"
+        detail = (f"🧠 Modelo {pct3(g['model'])} · 🏦 Mercado {mk}\n"
+                  f"Ambas marcam: {p['BTTS']:.0%} · 📚 {g['nb']} casa(s) · {pref}")
+    # os detalhes ficam escondidos: toca para abrir
+    head.append(f"<blockquote expandable>{detail}</blockquote>")
+    return "\n".join(head)
+
 
 
 def fav_label(g):
@@ -708,67 +701,75 @@ def history_blocks(picks, preds, newly):
 
 def build_blocks(results, fallback, extra=None):
     now = dt.datetime.now(LISBON)
-    blocks = [
-        "⚽ <b>ANÁLISE DO DIA</b>\n"
-        f"📅 {DIAS[now.weekday()]}, {now:%d/%m/%Y}\n"
-        "━━━━━━━━━━━━━━━"
-    ]
-    if fallback:
-        blocks.append(f"ℹ️ <i>Sem jogos nas próximas {HOURS_AHEAD}h nas ligas seguidas "
-                      "(pausa de seleções?). A mostrar os próximos jogos.</i>")
     all_games = [g for games in results.values() for g in games]
-    favs = sorted((g for g in all_games if not g.get("market_only") and fav_label(g)[1] >= CLEAR_FAV),
-                  key=lambda g: -fav_label(g)[1])
-    if favs:
-        lines = ["⭐ <b>FAVORITOS CLAROS</b>",
-                 "<i>Nos testes, favoritos com 60% ou mais ganharam cerca de 72% das vezes.</i>", ""]
-        for g in favs[:6]:
-            name, pr = fav_label(g)
-            lines.append(f"• <b>{esc(name)}</b> {pr:.0%} — {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}")
-        blocks.append("\n".join(lines))
+    club = [g for g in all_games if not g.get("market_only")]
+    favs = sorted((g for g in club if fav_label(g)[1] >= CLEAR_FAV), key=lambda g: -fav_label(g)[1])
     all_picks, books = [], set()
     for league, games in results.items():
-        if not games:
-            continue
-        blocks.append(f"🏆 <b>{esc(league.upper())}</b>")
         for g in games:
-            blocks.append(game_block(g))
             books.update(g["books"])
             for pk in g["picks"]:
                 all_picks.append((pk["edge"], g, pk))
-    if not all_games:
-        blocks.append("Sem jogos analisados nos próximos dias.")
     all_picks.sort(key=lambda x: -x[0])
-    head = "🔎 <b>ODDS ACIMA DO CONSENSO</b>"
-    note = ("<i>Odds que pagam mais do que a previsão final sugere. Num teste de 2 épocas, "
-            "este tipo de sinal não deu lucro: serve para investigar, não para apostar.</i>")
-    if not all_picks:
-        blocks.append(head + "\nNenhuma odd claramente acima do consenso hoje. 🧘")
+
+    blocks = [f"⚽ <b>ANALISTA DESPORTO</b>\n📅 {DIAS[now.weekday()]}, {now:%d/%m/%Y}\n━━━━━━━━━━━━━━━"]
+    # 1) resumo curto no topo
+    n_leagues = sum(1 for gs in results.values() if gs)
+    lines = ["📌 <b>RESUMO</b>"]
+    if fallback:
+        lines.append("ℹ️ <i>Sem jogos nas próximas 48h (pausa?): mostro os próximos.</i>")
+    if all_games:
+        lines.append(f"🗓 {len(all_games)} jogos em {n_leagues} competição(ões)")
     else:
-        lines = [head, note, ""]
-        for i, (edge, g, pk) in enumerate(all_picks[:5]):
-            warn = "\n   ⚠️ <i>Diferença grande: desconfia, pode ser erro do modelo ou odd desatualizada.</i>" \
-                if edge > WARN_EDGE else ""
-            pm = f"{pk['p_market']:.0%}" if pk["p_market"] is not None else "–"
+        lines.append("Sem jogos analisados nos próximos dias.")
+    if favs:
+        lines.append("")
+        lines.append("⭐ <b>Favoritos claros</b>")
+        for g in favs[:4]:
+            name, pr = fav_label(g)
+            lines.append(f"• <b>{esc(name)}</b> {pr:.0%} · {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}")
+        lines.append("<i>Nos testes, favoritos de 60%+ ganharam cerca de 72% das vezes.</i>")
+    if club:
+        eq = min(club, key=lambda g: max(g["final"]))
+        gl = max(club, key=lambda g: g["p"]["lh"] + g["p"]["la"])
+        lines.append("")
+        lines.append(f"⚖️ <b>Mais equilibrado:</b> {esc(eq['home'])} vs {esc(eq['away'])} ({pct3(eq['final'])})")
+        lines.append(f"🔥 <b>Mais golos esperados:</b> {esc(gl['home'])} vs {esc(gl['away'])} ({gl['p']['lh'] + gl['p']['la']:.1f})")
+    lines.append("")
+    lines.append(f"🔎 Odds acima do consenso: {len(all_picks)}" if all_picks else "🔎 Odds acima do consenso: nenhuma hoje 🧘")
+    blocks.append("\n".join(lines))
+
+    # 2) jogos por competição (detalhes escondidos em cada jogo)
+    for league, games in results.items():
+        if not games:
+            continue
+        blocks.append(f"{LEAGUE_ICON.get(league, '🏆')} <b>{esc(league.upper())}</b>")
+        for g in games:
+            blocks.append(game_block(g))
+
+    # 3) odds acima do consenso (compacto)
+    if all_picks:
+        lines = ["🔎 <b>ODDS ACIMA DO CONSENSO</b>"]
+        for i, (edge, g, pk) in enumerate(all_picks[:4]):
+            warn = " ⚠️" if edge > WARN_EDGE else ""
             lines.append(
-                f"{NUMS[i]} <b>{esc(pk['label'])}</b> @ <b>{pk['odd']:.2f}</b> ({esc(pk['book'])})\n"
-                f"   {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}\n"
-                f"   📊 Previsão {pk['prob']:.0%} (modelo {pk['p_model']:.0%} · mercado {pm}) · "
-                f"diferença <b>{edge:+.0%}</b>{warn}"
+                f"{NUMS[i]} <b>{esc(pk['label'])}</b> @ <b>{pk['odd']:.2f}</b> ({esc(pk['book'])}){warn}\n"
+                f"   {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])} · previsão {pk['prob']:.0%} ({edge:+.0%})"
             )
+        lines.append("<i>Nos testes, este tipo de sinal não deu lucro: serve para investigar, não para apostar.</i>")
         blocks.append("\n".join(lines))
     if extra:
         blocks.extend(extra)
+    foot = []
     if books:
         nb_pref = sum(1 for g in all_games if g["has_pref"])
-        blocks.append("📚 Odds de: " + esc(", ".join(sorted(books)))
-                      + f"\n🏦 Betclic aparece em {nb_pref} de {len(all_games)} jogos mostrados.")
-    blocks.append(
-        "ℹ️ <i>Previsão final = sobretudo o consenso do mercado, com um toque do modelo "
-        "(nos testes, o mercado sozinho foi o melhor previsor).</i>\n"
-        "⚠️ <i>Estimativa estatística, não garantia. Aposta com responsabilidade.</i>"
-    )
+        foot.append("📚 Odds: " + esc(", ".join(sorted(books))) + f" · Betclic em {nb_pref}/{len(all_games)} jogos")
+    foot.append("ℹ️ <i>Previsão = sobretudo o consenso do mercado + um toque do modelo. Toca na caixa de cada jogo para ver os detalhes.</i>")
+    foot.append("⚠️ <i>Estimativa estatística, não garantia. Aposta com responsabilidade.</i>")
+    foot.append("— <b>Analista Desporto</b> 🤖")
+    blocks.append("\n".join(foot))
     return blocks
+
 
 
 def plain_text(blocks):
@@ -810,13 +811,17 @@ def telegram(blocks):
             cur = f"{cur}\n\n{b}" if cur else b
     if cur:
         chunks.append(cur)
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     for c in chunks:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT, "text": c, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=30,
-        )
+        r = requests.post(url, json={"chat_id": TG_CHAT, "text": c, "parse_mode": "HTML",
+                                     "disable_web_page_preview": True}, timeout=30)
+        if r.status_code == 400:  # formato não aceite: tenta sem a caixa escondida e, por fim, texto simples
+            print("Telegram 400 (HTML):", r.text[:200], file=sys.stderr)
+            c2 = c.replace("<blockquote expandable>", "<blockquote>")
+            r = requests.post(url, json={"chat_id": TG_CHAT, "text": c2, "parse_mode": "HTML",
+                                         "disable_web_page_preview": True}, timeout=30)
+            if r.status_code == 400:
+                r = requests.post(url, json={"chat_id": TG_CHAT, "text": re.sub(r"<[^>]+>", "", c)}, timeout=30)
         r.raise_for_status()
 
 
