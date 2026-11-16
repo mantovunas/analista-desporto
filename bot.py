@@ -41,7 +41,10 @@ LEAGUES = {
     "BL1": ("Bundesliga", "soccer_germany_bundesliga"),
     "FL1": ("Ligue 1", "soccer_france_ligue_one"),
     "CL": ("Champions League", "soccer_uefa_champs_league"),
+    "UNL": ("Liga das Nações", "soccer_uefa_nations_league"),
 }
+# Competições sem histórico gratuito (seleções): só mostra o consenso do mercado, sem modelo.
+MARKET_ONLY = {"UNL", "CL"}  # CL: equipas de ligas diferentes e poucos jogos, o modelo não é fiável
 # código na football-data.co.uk (épocas anteriores). A Champions não tem.
 CO_UK = {"PPL": "P1", "PL": "E0", "PD": "SP1", "SA": "I1", "BL1": "D1", "FL1": "F1"}
 
@@ -375,6 +378,21 @@ def pick_odds(ev):
     return {sel: pref.get(sel) or best[sel] for sel in best}
 
 
+def analyse_market_only(ev):
+    mk = consensus(ev)
+    if not mk["h2h"]:
+        return None
+    return {
+        "id": ev.get("id") or f"{ev['home_team']}|{ev['away_team']}|{ev['commence_time']}",
+        "home": ev["home_team"], "away": ev["away_team"], "time": ev["commence_time"],
+        "fd_home": ev["home_team"], "fd_away": ev["away_team"],
+        "p": None, "model": None, "market": mk["h2h"], "final": mk["h2h"],
+        "final_o": mk["o25"], "nb": mk["n"], "conf": "baixa", "picks": [], "market_only": True,
+        "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
+        "has_pref": any(b["key"] == BOOKMAKER for b in ev.get("bookmakers", [])),
+    }
+
+
 def analyse_event(ev, st):
     home = match_team(ev["home_team"], st["att"].keys())
     away = match_team(ev["away_team"], st["att"].keys())
@@ -414,6 +432,7 @@ def analyse_event(ev, st):
         "p": p, "model": model, "market": mk["h2h"], "final": final, "final_o": final_o,
         "nb": mk["n"], "conf": conf, "picks": picks,
         "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
+        "has_pref": any(b["key"] == BOOKMAKER for b in ev.get("bookmakers", [])),
     }
 
 
@@ -496,6 +515,8 @@ def log_new(picks, preds, all_results, shown, now):
     by_id = {r["id"]: r for r in preds}
     for league, games in all_results.items():
         for g in games:
+            if g.get("market_only"):
+                continue  # sem modelo e sem resultados gratuitos para avaliar
             p = g["p"]
             vals = {
                 "pH": f"{p['H']:.4f}", "pD": f"{p['D']:.4f}", "pA": f"{p['A']:.4f}",
@@ -559,7 +580,24 @@ def pct3(t):
     return "/".join(f"{x:.0%}".rstrip("%") for x in t) + "%"
 
 
+def game_block_market(g):
+    f = g["final"]
+    lines = [
+        f"🕗 <i>{fmt_time(g['time'])}</i>",
+        f"<b>{esc(g['home'])}</b> vs <b>{esc(g['away'])}</b>",
+        f"{bar(f[0])} {f[0]:.0%} 🏠 {esc(g['home'])}",
+        f"{bar(f[1])} {f[1]:.0%} 🤝 Empate",
+        f"{bar(f[2])} {f[2]:.0%} ✈️ {esc(g['away'])}",
+        "🏦 Só mercado (sem modelo fiável nesta competição)"
+        + (f" · +2.5 golos: {g['final_o']:.0%}" if g["final_o"] is not None else ""),
+        f"📚 {g['nb']} casa(s) · " + ("✅ Betclic disponível" if g["has_pref"] else "➖ sem Betclic"),
+    ]
+    return "\n".join(lines)
+
+
 def game_block(g):
+    if g.get("market_only"):
+        return game_block_market(g)
     p, f = g["p"], g["final"]
     lines = [
         f"🕗 <i>{fmt_time(g['time'])}</i>",
@@ -574,7 +612,8 @@ def game_block(g):
         lines.append(f"🧠 Modelo {pct3(g['model'])} · 🏦 sem mercado")
     lines += [
         f"⚽ Golos esperados: {p['lh']:.1f} – {p['la']:.1f} · +2.5: {g['final_o']:.0%} · Ambas marcam: {p['BTTS']:.0%}",
-        f"🔎 Confiança: {conf_txt(g['conf'])} · 📚 {g['nb']} casa(s)",
+        f"🔎 Confiança: {conf_txt(g['conf'])} · 📚 {g['nb']} casa(s) · "
+        + ("✅ Betclic disponível" if g["has_pref"] else "➖ sem Betclic"),
     ]
     return "\n".join(lines)
 
@@ -678,7 +717,7 @@ def build_blocks(results, fallback, extra=None):
         blocks.append(f"ℹ️ <i>Sem jogos nas próximas {HOURS_AHEAD}h nas ligas seguidas "
                       "(pausa de seleções?). A mostrar os próximos jogos.</i>")
     all_games = [g for games in results.values() for g in games]
-    favs = sorted((g for g in all_games if fav_label(g)[1] >= CLEAR_FAV),
+    favs = sorted((g for g in all_games if not g.get("market_only") and fav_label(g)[1] >= CLEAR_FAV),
                   key=lambda g: -fav_label(g)[1])
     if favs:
         lines = ["⭐ <b>FAVORITOS CLAROS</b>",
@@ -721,7 +760,9 @@ def build_blocks(results, fallback, extra=None):
     if extra:
         blocks.extend(extra)
     if books:
-        blocks.append("📚 Odds de: " + esc(", ".join(sorted(books))))
+        nb_pref = sum(1 for g in all_games if g["has_pref"])
+        blocks.append("📚 Odds de: " + esc(", ".join(sorted(books)))
+                      + f"\n🏦 Betclic aparece em {nb_pref} de {len(all_games)} jogos mostrados.")
     blocks.append(
         "ℹ️ <i>Previsão final = sobretudo o consenso do mercado, com um toque do modelo "
         "(nos testes, o mercado sozinho foi o melhor previsor).</i>\n"
@@ -811,6 +852,17 @@ def main(now=None):
     results, idx = {}, {}
     for code, (name, sport) in LEAGUES.items():
         try:
+            if code in MARKET_ONLY:
+                games = []
+                for ev in odds_events(sport):
+                    t = parse_iso(ev["commence_time"])
+                    if now <= t <= far:
+                        g = analyse_market_only(ev)
+                        if g:
+                            games.append(g)
+                games.sort(key=lambda g: g["time"])
+                results[name] = games
+                continue
             matches = fd_matches(code)
             add_index(idx, matches)
             cur_hist = org_hist(matches)
