@@ -586,9 +586,12 @@ LEAGUE_ICON = {"Liga Portugal": "🇵🇹", "Premier League": "🏴\U000e0067\U0
 
 
 def probs_line(f):
-    """Uma linha com a barra do resultado mais provável e as 3 probabilidades."""
-    top = max(f)
-    return f"{bar(top)}  🏠 {f[0]:.0%}  🤝 {f[1]:.0%}  ✈️ {f[2]:.0%}"
+    """Barra de 10 quadrados dividida pelas 3 probabilidades: 🟩 casa · 🟨 empate · 🟦 fora."""
+    raw = [x * 10 for x in f]
+    n = [int(x) for x in raw]
+    for i in sorted(range(3), key=lambda i: raw[i] - n[i], reverse=True)[: 10 - sum(n)]:
+        n[i] += 1
+    return f"{'🟩' * n[0]}{'🟨' * n[1]}{'🟦' * n[2]}\n🏠 {f[0]:.0%}  🤝 {f[1]:.0%}  ✈️ {f[2]:.0%}"
 
 
 def game_block(g):
