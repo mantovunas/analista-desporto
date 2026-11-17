@@ -390,6 +390,7 @@ def analyse_market_only(ev):
         "final_o": mk["o25"], "nb": mk["n"], "conf": "baixa", "picks": [], "market_only": True,
         "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
         "has_pref": any(b["key"] == BOOKMAKER for b in ev.get("bookmakers", [])),
+        "odds": pick_odds(ev),
     }
 
 
@@ -433,6 +434,7 @@ def analyse_event(ev, st):
         "nb": mk["n"], "conf": conf, "picks": picks,
         "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
         "has_pref": any(b["key"] == BOOKMAKER for b in ev.get("bookmakers", [])),
+        "odds": pick_odds(ev),
     }
 
 
@@ -621,6 +623,77 @@ def fav_label(g):
     return name, f[i]
 
 
+def _trio(r, a, b, c):
+    v = (fnum(r.get(a)), fnum(r.get(b)), fnum(r.get(c)))
+    return v if None not in v else None
+
+
+def _final_probs(r):
+    return _trio(r, "fH", "fD", "fA") or _trio(r, "pH", "pD", "pA")
+
+
+def _result_idx(r):
+    gh, ga = int(r["golos_casa"]), int(r["golos_fora"])
+    return 0 if gh > ga else (1 if gh == ga else 2)
+
+
+def _brier(rows, keys):
+    tot = n = 0
+    for r in rows:
+        p = _trio(r, *keys)
+        if p is None:
+            continue
+        y = [0.0, 0.0, 0.0]
+        y[_result_idx(r)] = 1.0
+        tot += sum((a - b) ** 2 for a, b in zip(p, y))
+        n += 1
+    return (tot / n) if n else None
+
+
+def favourite_streaks(preds):
+    """Sequência atual e melhor sequência de favoritos claros (>= CLEAR_FAV) acertados."""
+    rows = []
+    for r in preds:
+        if r.get("estado") != "resolvida":
+            continue
+        p = _final_probs(r)
+        if p and max(p) >= CLEAR_FAV:
+            rows.append((r["inicio_utc"], p.index(max(p)) == _result_idx(r)))
+    rows.sort()
+    best = cur = 0
+    for _, ok in rows:
+        cur = cur + 1 if ok else 0
+        best = max(best, cur)
+    return cur, best, len(rows)
+
+
+def weekly_block(picks, preds, now):
+    """Resumo dos últimos 7 dias (enviado às segundas-feiras)."""
+    lo = now - dt.timedelta(days=7)
+    rp = [r for r in preds if r.get("estado") == "resolvida" and lo <= parse_iso(r["inicio_utc"]) <= now]
+    if not rp:
+        return None
+    lines = ["📅 <b>SEMANA PASSADA</b>", ""]
+    hit = sum(1 for r in rp if _final_probs(r) and _final_probs(r).index(max(_final_probs(r))) == _result_idx(r))
+    lines.append(f"⚽ {len(rp)} jogos avaliados · resultado mais provável acertou {hit}/{len(rp)} ({hit / len(rp):.0%})")
+    fav = [r for r in rp if _final_probs(r) and max(_final_probs(r)) >= CLEAR_FAV]
+    if fav:
+        ok = sum(1 for r in fav if _final_probs(r).index(max(_final_probs(r))) == _result_idx(r))
+        lines.append(f"⭐ Favoritos claros: {ok}/{len(fav)} ({ok / len(fav):.0%})")
+    bb, bm, bk = _brier(rp, ("fH", "fD", "fA")), _brier(rp, ("pH", "pD", "pA")), _brier(rp, ("mH", "mD", "mA"))
+    parts = [f"bot {bb:.3f}" if bb is not None else None, f"modelo {bm:.3f}" if bm is not None else None,
+             f"mercado {bk:.3f}" if bk is not None else None]
+    parts = [x for x in parts if x]
+    if parts:
+        lines.append("📐 Erro (mais baixo = melhor): " + " · ".join(parts))
+    wk = [r for r in picks if r.get("estado") in ("ganha", "perdida") and lo <= parse_iso(r["inicio_utc"]) <= now]
+    if wk:
+        profit = sum(float(r["lucro"]) for r in wk)
+        lines.append(f"🎯 Sugestões: {len(wk)} resolvidas · {profit:+.2f} unidades (ROI {profit / len(wk):+.0%})")
+    lines.append("<i>Uma semana é pouco: só dá para tirar conclusões com várias semanas.</i>")
+    return "\n".join(lines)
+
+
 def history_blocks(picks, preds, newly):
     blocks = []
     if newly:
@@ -695,6 +768,9 @@ def history_blocks(picks, preds, newly):
                 y = (gh > ga, gh == ga, gh < ga)
                 ok += 1 if y[p.index(max(p))] else 0
             lines.append(f"⭐ Favoritos claros (≥{CLEAR_FAV:.0%}): {len(fav)} jogos · acertou {ok / len(fav):.0%}")
+        cur, best, nfav = favourite_streaks(preds)
+        if nfav:
+            lines.append(f"🔥 Favoritos claros seguidos certos: {cur} (melhor sequência: {best})")
         lines.append("<i>Brier: 0.667 equivale a chutar; o mercado costuma ficar perto de 0.57.</i>")
     if len(res) < MIN_SAMPLE:
         lines.append(f"⚠️ <i>Amostra pequena ({len(res)} sugestões): só é fiável a partir de {MIN_SAMPLE}+.</i>")
@@ -725,22 +801,46 @@ def build_blocks(results, fallback, extra=None):
         lines.append(f"🗓 {len(all_games)} jogos em {n_leagues} competição(ões)")
     else:
         lines.append("Sem jogos analisados nos próximos dias.")
-    if favs:
-        lines.append("")
-        lines.append("⭐ <b>Favoritos claros</b>")
-        for g in favs[:4]:
-            name, pr = fav_label(g)
-            lines.append(f"• <b>{esc(name)}</b> {pr:.0%} · {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}")
-        lines.append("<i>Nos testes, favoritos de 60%+ ganharam cerca de 72% das vezes.</i>")
     if club:
         eq = min(club, key=lambda g: max(g["final"]))
         gl = max(club, key=lambda g: g["p"]["lh"] + g["p"]["la"])
         lines.append("")
         lines.append(f"⚖️ <b>Mais equilibrado:</b> {esc(eq['home'])} vs {esc(eq['away'])} ({pct3(eq['final'])})")
         lines.append(f"🔥 <b>Mais golos esperados:</b> {esc(gl['home'])} vs {esc(gl['away'])} ({gl['p']['lh'] + gl['p']['la']:.1f})")
+    if club:
+        top = max(club, key=lambda g: max(g["final"]))
+        name, pr = fav_label(top)
+        lines.append(f"🏆 <b>Jogo do dia:</b> {esc(top['home'])} vs {esc(top['away'])} · {fmt_time(top['time'])}")
+        lines.append(f"   {esc(name)} {pr:.0%} · golos esperados {top['p']['lh']:.1f}–{top['p']['la']:.1f}")
     lines.append("")
     lines.append(f"🔎 Odds acima do consenso: {len(all_picks)}" if all_picks else "🔎 Odds acima do consenso: nenhuma hoje 🧘")
     blocks.append("\n".join(lines))
+
+    # palpites mais prováveis (probabilidade alta; não é o mesmo que bom negócio)
+    cands = []
+    for g in all_games:
+        f = g["final"]
+        opts = [("H", f"Vitória {g['home']}", f[0]), ("D", "Empate", f[1]), ("A", f"Vitória {g['away']}", f[2])]
+        if g.get("final_o") is not None:
+            opts += [("O", "Mais de 2.5 golos", g["final_o"]), ("U", "Menos de 2.5 golos", 1 - g["final_o"])]
+        for sel, label, pr in opts:
+            if pr >= CLEAR_FAV and sel in g.get("odds", {}):
+                odd, book = g["odds"][sel]
+                cands.append((pr, label, odd, book, g))
+    cands.sort(key=lambda x: -x[0])
+    seen, chosen = set(), []
+    for c in cands:  # no máximo um palpite por jogo
+        if c[4]["id"] not in seen:
+            seen.add(c[4]["id"])
+            chosen.append(c)
+    if chosen:
+        lines = ["🎯 <b>PALPITES MAIS PROVÁVEIS</b>", ""]
+        for pr, label, odd, book, g in chosen[:5]:
+            lines.append(f"• <b>{esc(label)}</b> · {pr:.0%} · odd {odd:.2f} ({esc(book)})\n"
+                         f"   {esc(g['home'])} vs {esc(g['away'])} · {fmt_time(g['time'])}")
+        lines.append("<i>Nos testes, palpites de 60%+ acertaram cerca de 72% das vezes. Mas mais provável não é o mesmo "
+                     "que bom negócio: quanto mais provável, mais baixa a odd e menos paga. Não é conselho de aposta.</i>")
+        blocks.append("\n".join(lines))
 
     # 2) jogos por competição (detalhes escondidos em cada jogo)
     for league, games in results.items():
@@ -924,6 +1024,10 @@ def main(now=None):
         write_csv(PICKS_FILE, PICK_FIELDS, picks_h)
         write_csv(PREDS_FILE, PRED_FIELDS, preds_h)
         extra = history_blocks(picks_h, preds_h, newly)
+        if now.astimezone(LISBON).weekday() == 0:
+            wb = weekly_block(picks_h, preds_h, now)
+            if wb:
+                extra.insert(0, wb)
     except Exception as e:  # noqa: BLE001
         print("Histórico falhou:", e, file=sys.stderr)
 
