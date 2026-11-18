@@ -71,6 +71,7 @@ MIN_EDGE = 0.04
 MAX_EDGE = 0.15        # acima disto desconfia-se (erro do modelo ou odd errada)
 WARN_EDGE = 0.10
 MIN_ODD, MAX_ODD = 1.40, 6.00
+MIN_ODD_TIP = 1.15     # palpites mais prováveis: odds abaixo disto não pagam quase nada
 CLEAR_FAV = 0.60       # "favorito claro" (nos testes acertou ~72-75% das vezes)
 
 # histórico
@@ -824,7 +825,7 @@ def build_blocks(results, fallback, extra=None):
         if g.get("final_o") is not None:
             opts += [("O", "Mais de 2.5 golos", g["final_o"]), ("U", "Menos de 2.5 golos", 1 - g["final_o"])]
         for sel, label, pr in opts:
-            if pr >= CLEAR_FAV and sel in g.get("odds", {}):
+            if pr >= CLEAR_FAV and sel in g.get("odds", {}) and g["odds"][sel][0] >= MIN_ODD_TIP:
                 odd, book = g["odds"][sel]
                 cands.append((pr, label, odd, book, g))
     cands.sort(key=lambda x: -x[0])
@@ -896,7 +897,7 @@ def gemini_summary(text):
             timeout=60,
         )
         txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return "🧠 <b>RESUMO</b>\n" + esc(txt)
+        return "🧠 <b>LEITURA DO DIA</b>\n" + esc(txt)
     except Exception as e:  # noqa: BLE001
         print("Gemini falhou:", e, file=sys.stderr)
         if r is not None:
@@ -1034,7 +1035,7 @@ def main(now=None):
     blocks = build_blocks(shown, fallback, extra)
     summary = gemini_summary(plain_text(blocks))
     if summary:
-        blocks.insert(len(blocks) - 1, summary)
+        blocks.insert(2, summary)  # logo a seguir ao resumo do topo
     telegram(blocks)
     mark_sent(now)
 
