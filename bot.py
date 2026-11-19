@@ -888,21 +888,24 @@ def gemini_summary(text):
         "português de Portugal um resumo curto (máx. 6 linhas) dos jogos mais interessantes "
         "e dos riscos. Não inventes lesões nem notícias.\n\n" + text
     )
-    r = None
-    try:
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            params={"key": GEMINI_KEY},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=60,
-        )
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return "🧠 <b>LEITURA DO DIA</b>\n" + esc(txt)
-    except Exception as e:  # noqa: BLE001
-        print("Gemini falhou:", e, file=sys.stderr)
-        if r is not None:
-            print("Resposta do Gemini:", r.text[:300], file=sys.stderr)
-        return ""
+    for attempt in (1, 2):  # a Google falha às vezes: tenta duas vezes
+        r = None
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                params={"key": GEMINI_KEY},
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=60,
+            )
+            txt = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return "🧠 <b>LEITURA DO DIA</b>\n" + esc(txt)
+        except Exception as e:  # noqa: BLE001
+            print(f"Gemini falhou (tentativa {attempt}):", e, file=sys.stderr)
+            if r is not None:
+                print("Resposta do Gemini:", r.text[:300], file=sys.stderr)
+            if attempt == 1:
+                time.sleep(8)
+    return ""
 
 
 def telegram(blocks):
