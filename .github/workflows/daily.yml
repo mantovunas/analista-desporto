@@ -9,6 +9,11 @@ on:
     - cron: "17 12 * * *"
     - cron: "17 15 * * *"
   workflow_dispatch:       # botão para correr manualmente
+    inputs:
+      modo:
+        description: "analise (mensagem do dia) ou resultados (resumo da noite)"
+        default: "analise"
+        required: false
 
 permissions:
   contents: write          # permite ao bot guardar o histórico no repositório
@@ -30,6 +35,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python bot.py
         env:
+          MODO: ${{ github.event.inputs.modo }}
           FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
