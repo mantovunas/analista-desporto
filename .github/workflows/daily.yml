@@ -11,7 +11,7 @@ on:
   workflow_dispatch:       # botão para correr manualmente
     inputs:
       modo:
-        description: "analise (mensagem do dia) ou resultados (resumo da noite)"
+        description: "analise (mensagem do dia), resultados (resumo da noite) ou simulacao (corrida da época)"
         default: "analise"
         required: false
 
