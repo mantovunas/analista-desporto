@@ -37,6 +37,8 @@ LEAGUES = {
     "PPL": ("Liga Portugal", "soccer_portugal_primeira_liga"),
     "PL": ("Premier League", "soccer_epl"),
     "PD": ("La Liga", "soccer_spain_la_liga"),
+    "ELC": ("Championship", "soccer_efl_champ"),
+    "DED": ("Eredivisie", "soccer_netherlands_eredivisie"),
     "SA": ("Serie A", "soccer_italy_serie_a"),
     "BL1": ("Bundesliga", "soccer_germany_bundesliga"),
     "FL1": ("Ligue 1", "soccer_france_ligue_one"),
@@ -44,9 +46,11 @@ LEAGUES = {
     "UNL": ("Liga das Nações", "soccer_uefa_nations_league"),
 }
 # Competições sem histórico gratuito (seleções): só mostra o consenso do mercado, sem modelo.
+# Pedir só o resultado (1 crédito em vez de 2) nas competições menores; pedidos sem jogos não gastam créditos.
+H2H_ONLY = {"CL", "UNL", "ELC", "DED"}
 MARKET_ONLY = {"UNL", "CL"}  # CL: equipas de ligas diferentes e poucos jogos, o modelo não é fiável
 # código na football-data.co.uk (épocas anteriores). A Champions não tem.
-CO_UK = {"PPL": "P1", "PL": "E0", "PD": "SP1", "SA": "I1", "BL1": "D1", "FL1": "F1"}
+CO_UK = {"PPL": "P1", "PL": "E0", "PD": "SP1", "SA": "I1", "BL1": "D1", "FL1": "F1", "ELC": "E1", "DED": "N1"}
 
 HOURS_AHEAD = 48       # jogos nas próximas X horas
 FALLBACK_HOURS = 240   # se não houver jogos perto, mostra os próximos (10 dias)
@@ -89,7 +93,7 @@ PICK_FIELDS = [
 PRED_FIELDS = [
     "id", "enviado_em", "liga", "casa", "fora", "fd_casa", "fd_fora", "inicio_utc",
     "pH", "pD", "pA", "pO25", "pBTTS", "mH", "mD", "mA", "fH", "fD", "fA", "nb",
-    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora",
+    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora", "m0H", "m0D", "m0A",
 ]
 
 LISBON = ZoneInfo("Europe/Lisbon")
@@ -284,12 +288,12 @@ def build_strengths(hist, today):
     return {"att": att, "def": dfn, "n": n, "avg_h": avg_h, "avg_a": avg_a}
 
 
-def odds_events(sport):
+def odds_events(sport, markets="h2h,totals"):
     r = requests.get(
         f"https://api.the-odds-api.com/v4/sports/{sport}/odds",
         params={
             "apiKey": ODDS_KEY, "regions": ODDS_REGIONS,
-            "markets": "h2h,totals", "oddsFormat": "decimal",
+            "markets": markets, "oddsFormat": "decimal",
         },
         timeout=30,
     )
@@ -535,10 +539,11 @@ def log_new(picks, preds, all_results, shown, now):
             }
             old = by_id.get(g["id"])
             if old is None:
+                first = {f"m0{k}": vals[f"m{k}"] for k in "HDA"}  # 1.ª leitura do mercado (nunca é atualizada)
                 row = {"id": g["id"], "enviado_em": stamp, "liga": league,
                        "casa": g["home"], "fora": g["away"],
                        "fd_casa": g["fd_home"], "fd_fora": g["fd_away"],
-                       "estado": "pendente", **vals}
+                       "estado": "pendente", **vals, **first}
                 preds.append(row)
                 by_id[g["id"]] = row
             elif old["estado"] == "pendente":
@@ -585,7 +590,7 @@ def pct3(t):
     return "/".join(f"{x:.0%}".rstrip("%") for x in t) + "%"
 
 
-LEAGUE_ICON = {"Liga Portugal": "🇵🇹", "Premier League": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
+LEAGUE_ICON = {"Championship": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f", "Eredivisie": "🇳🇱", "Liga Portugal": "🇵🇹", "Premier League": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
                "La Liga": "🇪🇸", "Serie A": "🇮🇹", "Bundesliga": "🇩🇪", "Ligue 1": "🇫🇷",
                "Champions League": "⭐", "Liga das Nações": "🌍"}
 
@@ -954,8 +959,65 @@ def mark_sent(now):
         print("Não consegui gravar ultimo_envio:", e, file=sys.stderr)
 
 
+def results_night(now):
+    """Modo da noite: só resolve jogos terminados (sem gastar créditos de odds) e envia o resumo do dia."""
+    idx = {}
+    for code in LEAGUES:
+        if code in MARKET_ONLY:
+            continue
+        try:
+            add_index(idx, fd_matches(code))
+        except Exception as e:  # noqa: BLE001
+            print("Resultados: erro em", code, e, file=sys.stderr)
+    picks_h, preds_h = read_csv(PICKS_FILE), read_csv(PREDS_FILE)
+    before = {r["id"] for r in preds_h if r["estado"] == "pendente"}
+    newly = settle(picks_h, preds_h, idx, now)
+    write_csv(PICKS_FILE, PICK_FIELDS, picks_h)
+    write_csv(PREDS_FILE, PRED_FIELDS, preds_h)
+    done = sorted((r for r in preds_h if r["id"] in before and r["estado"] == "resolvida"),
+                  key=lambda r: r["inicio_utc"])
+    if not done and not newly:
+        print("Sem jogos novos terminados; não envio nada.", file=sys.stderr)
+        return
+    d = now.astimezone(LISBON)
+    blocks = [f"🌙 <b>RESULTADOS DE HOJE</b>\n📅 {DIAS[d.weekday()]}, {d:%d/%m/%Y}\n━━━━━━━━━━━━━━━"]
+    names = ("casa", "empate", "fora")
+    hits = favs = favs_ok = 0
+    lines = []
+    for r in done:
+        p = _final_probs(r)
+        res = _result_idx(r)
+        if p:
+            top = p.index(max(p))
+            ok = top == res
+            hits += ok
+            if max(p) >= CLEAR_FAV:
+                favs += 1
+                favs_ok += ok
+            lines.append(f"{'✅' if ok else '❌'} <b>{esc(r['casa'])} {r['golos_casa']}–{r['golos_fora']} {esc(r['fora'])}</b>\n"
+                         f"   previsto: {names[top]} {max(p):.0%}")
+        else:
+            lines.append(f"▫️ {esc(r['casa'])} {r['golos_casa']}–{r['golos_fora']} {esc(r['fora'])}")
+    if lines:
+        blocks.append("\n".join(lines[:20]) + (f"\n… e mais {len(lines) - 20}." if len(lines) > 20 else ""))
+        sm = [f"⚽ {len(done)} jogos terminados · resultado mais provável acertou {hits}/{len(done)}"]
+        if favs:
+            sm.append(f"⭐ Favoritos claros: {favs_ok}/{favs}")
+        blocks.append("\n".join(sm))
+    if newly:
+        blocks.append(history_blocks(picks_h, preds_h, newly)[0])
+    blocks.append("— <b>Analista Desporto</b> 🤖")
+    telegram(blocks)
+
+
 def main(now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
+    if os.getenv("MODO", "").strip().lower() == "resultados":
+        try:
+            results_night(now)
+        except Exception as e:  # noqa: BLE001
+            print("Modo resultados falhou:", e, file=sys.stderr)
+        return
     # Execuções automáticas repetidas (rede de segurança contra atrasos do GitHub): só envia 1x por dia.
     if os.getenv("GITHUB_EVENT_NAME") == "schedule" and already_sent_today(now):
         print("Já enviado hoje; nada a fazer.", file=sys.stderr)
@@ -968,7 +1030,7 @@ def main(now=None):
         try:
             if code in MARKET_ONLY:
                 games = []
-                for ev in odds_events(sport):
+                for ev in odds_events(sport, "h2h" if code in H2H_ONLY else "h2h,totals"):
                     t = parse_iso(ev["commence_time"])
                     if now <= t <= far:
                         g = analyse_market_only(ev)
@@ -996,7 +1058,7 @@ def main(now=None):
                 print("Poucos dados:", name, file=sys.stderr)
                 continue
             games = []
-            for ev in odds_events(sport):
+            for ev in odds_events(sport, "h2h" if code in H2H_ONLY else "h2h,totals"):
                 t = parse_iso(ev["commence_time"])
                 if not (now <= t <= far):
                     continue
