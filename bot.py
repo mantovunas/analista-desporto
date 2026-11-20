@@ -422,6 +422,8 @@ def analyse_event(ev, st):
             "U": (1 - final_o, 1 - p["O25"], 1 - mk["o25"] if mk["o25"] is not None else None)}
     picks = []
     for sel, (odd, book) in pick_odds(ev).items():
+        if sel in ("O", "U") and mk["nt"] < 2:
+            continue  # mais/menos 2.5 só com 2+ casas: com uma só, o "consenso" é essa casa
         pf, pm, pk = prob[sel]
         edge = pf * odd - 1
         if MIN_EDGE <= edge <= MAX_EDGE and MIN_ODD <= odd <= MAX_ODD:
