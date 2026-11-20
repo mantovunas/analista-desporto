@@ -160,11 +160,11 @@ def match_team(name, candidates, min_score=0.6):
 
 
 # ---------- dados ----------
-def fd_matches(code):
+def fd_matches(code, status="FINISHED"):
     r = requests.get(
         f"https://api.football-data.org/v4/competitions/{code}/matches",
         headers={"X-Auth-Token": FD_KEY},
-        params={"status": "FINISHED"},
+        params={"status": status},
         timeout=30,
     )
     r.raise_for_status()
@@ -939,6 +939,179 @@ def telegram(blocks):
         r.raise_for_status()
 
 
+# ---------- simulador da época ----------
+SIM_LEAGUES = {  # código: (nº de lugares "Champions", nº de lugares de descida)
+    "PL": (4, 3), "PD": (4, 3), "SA": (4, 3), "BL1": (4, 2), "FL1": (3, 2), "PPL": (2, 2),
+}
+SIM_RUNS = 4000
+SIM_FILE = f"{HIST_DIR}/simulacao.csv"
+SIM_FIELDS = ["data", "liga", "equipa", "p_titulo", "p_champions", "p_descida", "pts_esperados"]
+
+
+def current_table(matches):
+    """Pontos, golos marcados e sofridos da época atual (resultados aos 90 minutos)."""
+    t = {}
+    for m in matches:
+        sc = score90(m)
+        if sc is None:
+            continue
+        h, a = m["homeTeam"]["name"], m["awayTeam"]["name"]
+        for n in (h, a):
+            t.setdefault(n, {"pts": 0, "gf": 0, "ga": 0})
+        t[h]["gf"] += sc[0]; t[h]["ga"] += sc[1]; t[a]["gf"] += sc[1]; t[a]["ga"] += sc[0]
+        if sc[0] > sc[1]: t[h]["pts"] += 3
+        elif sc[0] == sc[1]:
+            t[h]["pts"] += 1; t[a]["pts"] += 1
+        else: t[a]["pts"] += 3
+    return t
+
+
+def simulate_league(table, fixtures, st, n_top, n_bottom, runs=SIM_RUNS, seed=0):
+    """Simula o resto da época `runs` vezes. fixtures = [(casa, fora)] ainda por jogar."""
+    import bisect
+    import random
+    rng = random.Random(seed)
+    teams = sorted(set(table) | {x for f in fixtures for x in f})
+    ix = {t: i for i, t in enumerate(teams)}
+    n = len(teams)
+    base_pts = [table.get(t, {}).get("pts", 0) for t in teams]
+    base_gd = [table.get(t, {}).get("gf", 0) - table.get(t, {}).get("ga", 0) for t in teams]
+    base_gf = [table.get(t, {}).get("gf", 0) for t in teams]
+    fx = []
+    for h, a in fixtures:
+        att_h = st["att"].get(h, 1.0); def_h = st["def"].get(h, 1.0)
+        att_a = st["att"].get(a, 1.0); def_a = st["def"].get(a, 1.0)
+        lh = att_h * def_a * st["avg_h"]
+        la = att_a * def_h * st["avg_a"]
+        cum, outs, tot = [], [], 0.0
+        for i in range(MAX_GOALS + 1):
+            for j in range(MAX_GOALS + 1):
+                tot += pois(i, lh) * pois(j, la)
+                cum.append(tot); outs.append((i, j))
+        cum = [c / tot for c in cum]
+        fx.append((ix[h], ix[a], cum, outs))
+    title = [0] * n; top = [0] * n; bottom = [0] * n; pts_sum = [0.0] * n
+    for _ in range(runs):
+        pts = base_pts[:]; gd = base_gd[:]; gf = base_gf[:]
+        for hi, ai, cum, outs in fx:
+            i, j = outs[min(bisect.bisect_left(cum, rng.random()), len(outs) - 1)]
+            gd[hi] += i - j; gd[ai] += j - i; gf[hi] += i; gf[ai] += j
+            if i > j: pts[hi] += 3
+            elif i == j:
+                pts[hi] += 1; pts[ai] += 1
+            else: pts[ai] += 3
+        order = sorted(range(n), key=lambda k: -(pts[k] * 10**7 + (gd[k] + 1000) * 10**4 + gf[k] * 10 + rng.random() * 5))
+        title[order[0]] += 1
+        for pos, k in enumerate(order):
+            if pos < n_top: top[k] += 1
+            if pos >= n - n_bottom: bottom[k] += 1
+        for k in range(n):
+            pts_sum[k] += pts[k]
+    return {t: {"p_titulo": title[ix[t]] / runs, "p_champions": top[ix[t]] / runs,
+                "p_descida": bottom[ix[t]] / runs, "pts_esperados": pts_sum[ix[t]] / runs,
+                "pts": base_pts[ix[t]]} for t in teams}
+
+
+def prev_sim(rows, league, today):
+    """Última simulação guardada com pelo menos 5 dias."""
+    cutoff = (today - dt.timedelta(days=5)).isoformat()
+    dates = sorted({r["data"] for r in rows if r["liga"] == league and r["data"] <= cutoff})
+    if not dates:
+        return {}
+    return {r["equipa"]: r for r in rows if r["liga"] == league and r["data"] == dates[-1]}
+
+
+def arrow(now_p, old_p):
+    if old_p is None:
+        return ""
+    d = (now_p - old_p) * 100
+    if d >= 2: return f" ⬆️+{d:.0f}"
+    if d <= -2: return f" ⬇️{d:.0f}"
+    return ""
+
+
+def short_name(t):
+    t = re.sub(r"^1\.\s*", "", t)
+    t = re.sub(r"\b(FC|CF|AFC|SAD|AC|SC|CD|AS|RC|OGC|SS|SSC|US|TSG|VfB|VfL|SV|RB)\b\.?", " ", t)
+    return re.sub(r"\s+", " ", t).strip() or t
+
+
+def sim_block(league, res, prev, n_top, n_bottom, remaining):
+    def old(t, k):
+        try:
+            return float(prev[t][k])
+        except (KeyError, ValueError, TypeError):
+            return None
+    ordered = sorted(res.items(), key=lambda kv: -kv[1]["p_titulo"])
+    lines = [f"{LEAGUE_ICON.get(league, '🏆')} <b>{esc(league.upper())}</b> · {remaining} jogos por jogar"]
+    cand = [(t, v) for t, v in ordered if v["p_titulo"] >= 0.01][:4]
+    if cand:
+        lines.append("🏆 <b>Campeão:</b> " + " · ".join(
+            f"{esc(short_name(t))} {v['p_titulo']:.0%}{arrow(v['p_titulo'], old(t, 'p_titulo'))}" for t, v in cand))
+    fight = sorted(((t, v) for t, v in res.items() if 0.10 <= v["p_champions"] <= 0.90),
+                   key=lambda kv: -kv[1]["p_champions"])[:4]
+    if fight:
+        lines.append(f"⭐ <b>Em luta pelo top {n_top}:</b> " + " · ".join(
+            f"{esc(short_name(t))} {v['p_champions']:.0%}{arrow(v['p_champions'], old(t, 'p_champions'))}" for t, v in fight))
+    rel = sorted(((t, v) for t, v in res.items() if v["p_descida"] >= 0.10),
+                 key=lambda kv: -kv[1]["p_descida"])[:4]
+    if rel:
+        lines.append("🔻 <b>Risco de descer:</b> " + " · ".join(
+            f"{esc(short_name(t))} {v['p_descida']:.0%}{arrow(v['p_descida'], old(t, 'p_descida'))}" for t, v in rel))
+    return "\n".join(lines)
+
+
+def season_sim_blocks(models, today, store=True):
+    """models: {código: (nome, st, jogos_terminados)}. Devolve os blocos da mensagem e grava a simulação."""
+    rows_old = read_csv(SIM_FILE)
+    rows_new, body = [], []
+    for code, (name, st, finished) in models.items():
+        try:
+            fixtures_raw = fd_matches(code, "SCHEDULED,TIMED")
+            fixtures = [(m["homeTeam"]["name"], m["awayTeam"]["name"]) for m in fixtures_raw
+                        if m.get("homeTeam", {}).get("name") and m.get("awayTeam", {}).get("name")]
+            if not fixtures:
+                continue
+            n_top, n_bottom = SIM_LEAGUES[code]
+            res = simulate_league(current_table(finished), fixtures, st, n_top, n_bottom, seed=today.toordinal())
+            body.append(sim_block(name, res, prev_sim(rows_old, name, today), n_top, n_bottom, len(fixtures)))
+            for t, v in res.items():
+                rows_new.append({"data": today.isoformat(), "liga": name, "equipa": t,
+                                 "p_titulo": f"{v['p_titulo']:.4f}", "p_champions": f"{v['p_champions']:.4f}",
+                                 "p_descida": f"{v['p_descida']:.4f}", "pts_esperados": f"{v['pts_esperados']:.1f}"})
+        except Exception as e:  # noqa: BLE001
+            print("Simulação falhou em", code, e, file=sys.stderr)
+    if not body:
+        return []
+    if store:
+        try:
+            keep = [r for r in rows_old if r["data"] != today.isoformat()]
+            write_csv(SIM_FILE, SIM_FIELDS, keep + rows_new)
+        except Exception as e:  # noqa: BLE001
+            print("Não consegui gravar a simulação:", e, file=sys.stderr)
+    head = (f"🏁 <b>CORRIDA DA ÉPOCA</b>\n📅 {today:%d/%m/%Y} · simulação de {SIM_RUNS} épocas\n━━━━━━━━━━━━━━━")
+    note = ("<i>Cada liga é simulada {n} vezes com as forças do modelo (sem lesões, sem mercado de transferências). "
+            "É uma estimativa, não uma previsão garantida. ⬆️⬇️ = mudança desde a semana passada, em pontos percentuais.</i>").format(n=SIM_RUNS)
+    return [head] + body + [note, "— <b>Analista Desporto</b> 🤖"]
+
+
+def build_model(code, name, today, matches):
+    """Forças de ataque/defesa: jogos da época atual + épocas anteriores (CSV), com decaimento."""
+    cur_hist = org_hist(matches)
+    prior = []
+    if code in CO_UK:
+        try:
+            org_names = {m["home"] for m in cur_hist} | {m["away"] for m in cur_hist}
+            prior, sem_prior = map_prior(load_prior(CO_UK[code], today), org_names)
+            print(f"{name}: {len(cur_hist)} jogos da época + {len(prior)} de épocas anteriores"
+                  + (f" | sem histórico anterior: {', '.join(sem_prior)}" if sem_prior else ""),
+                  file=sys.stderr)
+        except Exception as e:  # noqa: BLE001
+            print(f"{name}: épocas anteriores indisponíveis ({e})", file=sys.stderr)
+            prior = []
+    return build_strengths(prior + cur_hist, today)
+
+
 SENT_FILE = f"{HIST_DIR}/ultimo_envio.txt"
 
 
@@ -1012,6 +1185,21 @@ def results_night(now):
 
 def main(now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
+    if os.getenv("MODO", "").strip().lower() == "simulacao":
+        try:
+            models = {}
+            for code in SIM_LEAGUES:
+                name = LEAGUES[code][0]
+                matches = fd_matches(code)
+                st = build_model(code, name, now.date(), matches)
+                if st:
+                    models[code] = (name, st, matches)
+            sb = season_sim_blocks(models, now.date())
+            if sb:
+                telegram(sb)
+        except Exception as e:  # noqa: BLE001
+            print("Modo simulação falhou:", e, file=sys.stderr)
+        return
     if os.getenv("MODO", "").strip().lower() == "resultados":
         try:
             results_night(now)
@@ -1025,7 +1213,8 @@ def main(now=None):
     today = now.date()
     near = now + dt.timedelta(hours=HOURS_AHEAD)
     far = now + dt.timedelta(hours=FALLBACK_HOURS)
-    results, idx = {}, {}
+    results, idx, sim_models = {}, {}, {}
+    want_sim = now.astimezone(LISBON).weekday() == 0  # corrida da época: às segundas-feiras
     for code, (name, sport) in LEAGUES.items():
         try:
             if code in MARKET_ONLY:
@@ -1041,22 +1230,12 @@ def main(now=None):
                 continue
             matches = fd_matches(code)
             add_index(idx, matches)
-            cur_hist = org_hist(matches)
-            prior = []
-            if code in CO_UK:
-                try:
-                    org_names = {m["home"] for m in cur_hist} | {m["away"] for m in cur_hist}
-                    prior, sem_prior = map_prior(load_prior(CO_UK[code], today), org_names)
-                    print(f"{name}: {len(cur_hist)} jogos da época + {len(prior)} de épocas anteriores"
-                          + (f" | sem histórico anterior: {', '.join(sem_prior)}" if sem_prior else ""),
-                          file=sys.stderr)
-                except Exception as e:  # noqa: BLE001
-                    print(f"{name}: épocas anteriores indisponíveis ({e})", file=sys.stderr)
-                    prior = []
-            st = build_strengths(prior + cur_hist, today)
+            st = build_model(code, name, today, matches)
             if not st:
                 print("Poucos dados:", name, file=sys.stderr)
                 continue
+            if want_sim and code in SIM_LEAGUES:
+                sim_models[code] = (name, st, matches)
             games = []
             for ev in odds_events(sport, "h2h" if code in H2H_ONLY else "h2h,totals"):
                 t = parse_iso(ev["commence_time"])
@@ -1105,6 +1284,13 @@ def main(now=None):
         blocks.insert(2, summary)  # logo a seguir ao resumo do topo
     telegram(blocks)
     mark_sent(now)
+    if sim_models:  # segunda mensagem, só às segundas-feiras
+        try:
+            sb = season_sim_blocks(sim_models, now.date())
+            if sb:
+                telegram(sb)
+        except Exception as e:  # noqa: BLE001
+            print("Corrida da época falhou:", e, file=sys.stderr)
 
 
 if __name__ == "__main__":
