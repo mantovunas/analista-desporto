@@ -28,6 +28,7 @@ ODDS_KEY = os.environ["ODDS_API_KEY"]
 TG_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TG_CHAT = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+AF_KEY = os.getenv("APIFOOTBALL_KEY", "")  # opcional: lesões (api-football.com, plano grátis)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 BOOKMAKER = os.getenv("BOOKMAKER", "betclic_fr")
 ODDS_REGIONS = os.getenv("ODDS_REGIONS", "fr")
@@ -93,7 +94,7 @@ PICK_FIELDS = [
 PRED_FIELDS = [
     "id", "enviado_em", "liga", "casa", "fora", "fd_casa", "fd_fora", "inicio_utc",
     "pH", "pD", "pA", "pO25", "pBTTS", "mH", "mD", "mA", "fH", "fD", "fA", "nb",
-    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora", "m0H", "m0D", "m0A",
+    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora", "m0H", "m0D", "m0A", "baixas_casa", "baixas_fora",
 ]
 
 LISBON = ZoneInfo("Europe/Lisbon")
@@ -438,6 +439,7 @@ def analyse_event(ev, st):
         "home": ev["home_team"], "away": ev["away_team"], "time": ev["commence_time"],
         "fd_home": home, "fd_away": away,
         "p": p, "model": model, "market": mk["h2h"], "final": final, "final_o": final_o,
+        "why": {"att_h": st["att"][home], "def_h": st["def"][home], "att_a": st["att"][away], "def_a": st["def"][away]},
         "nb": mk["n"], "conf": conf, "picks": picks,
         "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
         "has_pref": any(b["key"] == BOOKMAKER for b in ev.get("bookmakers", [])),
@@ -536,6 +538,8 @@ def log_new(picks, preds, all_results, shown, now):
                 "mA": f"{g['market'][2]:.4f}" if g["market"] else "",
                 "nb": g["nb"], "xg_casa": f"{p['lh']:.2f}", "xg_fora": f"{p['la']:.2f}",
                 "confianca": g["conf"], "inicio_utc": g["time"],
+                "baixas_casa": len(g["inj"]["home"]) if g.get("inj") else "",
+                "baixas_fora": len(g["inj"]["away"]) if g.get("inj") else "",
             }
             old = by_id.get(g["id"])
             if old is None:
@@ -590,6 +594,88 @@ def pct3(t):
     return "/".join(f"{x:.0%}".rstrip("%") for x in t) + "%"
 
 
+# ---------- extras: resultados exatos, porquê, lesões ----------
+def top_scores(lh, la, k=3):
+    """Os k resultados exatos mais prováveis, segundo o modelo de Poisson."""
+    sc = [((i, j), pois(i, lh) * pois(j, la)) for i in range(7) for j in range(7)]
+    return sorted(sc, key=lambda x: -x[1])[:k]
+
+
+def why_line(g):
+    w = g.get("why")
+    if not w:
+        return ""
+    def tag(x):  # >1 = acima da média da liga
+        return f"{x:.2f}×"
+    return (f"🔬 Ataque/defesa (1.00 = média da liga): {esc(g['home'])} {tag(w['att_h'])} / {tag(w['def_h'])} · "
+            f"{esc(g['away'])} {tag(w['att_a'])} / {tag(w['def_a'])} (defesa acima de 1 = sofre mais)")
+
+
+INJ_WARN = 3  # 3+ baixas numa equipa: a confiança desce um nível
+AF_LEAGUES = {"PL": 39, "ELC": 40, "PD": 140, "SA": 135, "BL1": 78, "FL1": 61, "PPL": 94, "DED": 88, "CL": 2}
+
+
+def af_injuries(league_id, season, day):
+    """Lesionados/suspensos de uma liga num dia (API-Football). Devolve [(equipa, jogador, motivo)]."""
+    r = requests.get("https://v3.football.api-sports.io/injuries",
+                     headers={"x-apisports-key": AF_KEY},
+                     params={"league": league_id, "season": season, "date": day}, timeout=30)
+    data = r.json()
+    if r.status_code != 200 or data.get("errors"):
+        print("API-Football:", r.status_code, str(data.get("errors"))[:200], file=sys.stderr)
+        return []
+    out = []
+    for it in data.get("response", []):
+        out.append((it.get("team", {}).get("name", ""), it.get("player", {}).get("name", ""),
+                    it.get("player", {}).get("reason") or it.get("player", {}).get("type") or ""))
+    return out
+
+
+def attach_injuries(shown, league_codes, today):
+    """Junta a cada jogo mostrado a lista de baixas (só se houver chave da API-Football)."""
+    if not AF_KEY:
+        return
+    season = season_start(today)
+    cache = {}
+    for name, games in shown.items():
+        code = league_codes.get(name)
+        if not code or code not in AF_LEAGUES:
+            continue
+        for g in games:
+            day = parse_iso(g["time"]).date().isoformat()
+            key = (code, day)
+            try:
+                if key not in cache:
+                    cache[key] = af_injuries(AF_LEAGUES[code], season, day)
+                rows = cache[key]
+                if not rows:
+                    continue
+                teams = sorted({r[0] for r in rows})
+                th = match_team(g["home"], teams, 0.72)
+                ta = match_team(g["away"], teams, 0.72)
+                g["inj"] = {"home": [(p, m) for t, p, m in rows if t == th] if th else [],
+                            "away": [(p, m) for t, p, m in rows if t == ta] if ta else []}
+                if max(len(g["inj"]["home"]), len(g["inj"]["away"])) >= INJ_WARN and not g.get("market_only"):
+                    g["conf"] = {"alta": "média", "média": "baixa"}.get(g["conf"], g["conf"])
+                    g["inj_warn"] = True
+            except Exception as e:  # noqa: BLE001
+                print("Lesões falharam:", e, file=sys.stderr)
+
+
+def inj_line(g):
+    inj = g.get("inj")
+    if not inj or not (inj["home"] or inj["away"]):
+        return ""
+    def fmt(lst):
+        shown = ", ".join(f"{esc(p)} ({esc(m)})" if m else esc(p) for p, m in lst[:4])
+        return shown + (f" +{len(lst) - 4}" if len(lst) > 4 else "")
+    parts = []
+    if inj["home"]: parts.append(f"{esc(g['home'])}: {fmt(inj['home'])}")
+    if inj["away"]: parts.append(f"{esc(g['away'])}: {fmt(inj['away'])}")
+    warn = "⚠️ Muitas baixas: confiança reduzida. " if g.get("inj_warn") else ""
+    return "🚑 Baixas — " + " · ".join(parts) + "\n<i>" + warn + "(o modelo não conta lesões)</i>"
+
+
 LEAGUE_ICON = {"Championship": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f", "Eredivisie": "🇳🇱", "Liga Portugal": "🇵🇹", "Premier League": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
                "La Liga": "🇪🇸", "Serie A": "🇮🇹", "Bundesliga": "🇩🇪", "Ligue 1": "🇫🇷",
                "Champions League": "⭐", "Liga das Nações": "🌍"}
@@ -616,8 +702,13 @@ def game_block(g):
         p = g["p"]
         head.append(f"⚽ {p['lh']:.1f}–{p['la']:.1f} · +2.5: {g['final_o']:.0%} · {conf_txt(g['conf'])}")
         mk = pct3(g["market"]) if g["market"] else "sem mercado"
+        scores = " · ".join(f"{i}–{j} ({pr:.0%})" for (i, j), pr in top_scores(p["lh"], p["la"]))
         detail = (f"🧠 Modelo {pct3(g['model'])} · 🏦 Mercado {mk}\n"
+                  f"🎯 Resultados mais prováveis: {scores}\n"
                   f"Ambas marcam: {p['BTTS']:.0%} · 📚 {g['nb']} casa(s) · {pref}")
+        for extra_line in (why_line(g), inj_line(g)):
+            if extra_line:
+                detail += "\n" + extra_line
     # os detalhes ficam escondidos: toca para abrir
     head.append(f"<blockquote expandable>{detail}</blockquote>")
     return "\n".join(head)
@@ -1262,6 +1353,10 @@ def main(now=None):
     else:
         shown = near_res
 
+    try:
+        attach_injuries(shown, {v[0]: k for k, v in LEAGUES.items()}, today)
+    except Exception as e:  # noqa: BLE001
+        print("Lesões falharam:", e, file=sys.stderr)
     extra = []
     try:  # o histórico nunca pode impedir o envio da mensagem
         picks_h = read_csv(PICKS_FILE)
