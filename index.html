@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Painel do Analista</title>
+<meta name="description" content="Previsões de futebol, desempenho e corrida da época do Analista Desporto.">
+<style>
+:root{
+  --bg:#f5f6f8; --card:#ffffff; --ink:#15191f; --muted:#5d6672; --line:#e3e6ea;
+  --home:#2e9e4f; --draw:#d9a300; --away:#2f6fd6; --good:#1f8a4c; --bad:#c9372c; --accent:#2f6fd6;
+  --shadow:0 1px 2px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1318; --card:#181d24; --ink:#eef1f4; --muted:#9aa4b0; --line:#262d36;
+    --home:#3fbf68; --draw:#e8b923; --away:#5b95f0; --good:#43c279; --bad:#ef6a5e; --accent:#5b95f0;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1318; --card:#181d24; --ink:#eef1f4; --muted:#9aa4b0; --line:#262d36;
+  --home:#3fbf68; --draw:#e8b923; --away:#5b95f0; --good:#43c279; --bad:#ef6a5e; --accent:#5b95f0; --shadow:none;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:0 16px calc(32px + env(safe-area-inset-bottom));}
+.wrap{max-width:760px;margin:0 auto}
+header{padding:20px 0 8px}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:13px;margin-top:2px}
+nav{position:sticky;top:0;background:var(--bg);z-index:5;padding:10px 0;margin:0 -16px;padding-left:16px;padding-right:16px;
+  display:flex;gap:6px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{flex:0 0 auto;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px;border-radius:999px;
+  font:inherit;font-size:14px;cursor:pointer}
+nav button[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+nav button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+section{display:none;padding-top:14px}
+section.on{display:block}
+h2{font-size:16px;margin:22px 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.kpi .v{font-size:24px;font-weight:650;letter-spacing:-.01em}
+.kpi .l{font-size:12.5px;color:var(--muted)}
+.muted{color:var(--muted);font-size:13px}
+.game .top{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted)}
+.game .teams{font-weight:600;margin:4px 0 8px}
+.bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--line)}
+.bar i{display:block;height:100%}
+.bar .h{background:var(--home)}.bar .d{background:var(--draw)}.bar .a{background:var(--away)}
+.probs{display:flex;justify-content:space-between;font-size:13px;margin-top:6px;font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;color:var(--muted)}
+.res{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+.res:last-child{border-bottom:0}
+.res .m{min-width:0}.res .m b{font-weight:600}
+.res .s{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+.ok{color:var(--good)}.no{color:var(--bad)}
+svg{display:block;width:100%;height:auto;overflow:visible}
+svg text{fill:var(--muted);font-size:11px;font-family:inherit}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:12.5px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c);margin-right:5px;vertical-align:-1px}
+select{font:inherit;font-size:14px;padding:7px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin:0 6px 10px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:7px 4px;text-align:right;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--muted);font-weight:500}
+.empty{color:var(--muted);text-align:center;padding:26px 8px}
+footer{margin-top:26px;color:var(--muted);font-size:12.5px}
+footer a{color:var(--accent)}
+.warn{font-size:12.5px;color:var(--muted);border-left:3px solid var(--draw);padding-left:10px;margin:10px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>📊 Painel do Analista</h1>
+  <div class="sub" id="upd">a carregar…</div>
+</header>
+<nav role="tablist" aria-label="Secções">
+  <button role="tab" aria-selected="true" data-t="hoje">Hoje</button>
+  <button role="tab" aria-selected="false" data-t="desempenho">Desempenho</button>
+  <button role="tab" aria-selected="false" data-t="banca">Banca</button>
+  <button role="tab" aria-selected="false" data-t="epoca">Época</button>
+  <button role="tab" aria-selected="false" data-t="jogos">Jogos</button>
+</nav>
+
+<section id="hoje" class="on"></section>
+<section id="desempenho"></section>
+<section id="banca"></section>
+<section id="epoca"></section>
+<section id="jogos"></section>
+
+<footer>
+  Estimativas estatísticas, não garantem resultados. Aposta com responsabilidade.<br>
+  Previsões gravadas <b>antes</b> dos jogos e públicas:
+  <a id="repo" href="https://github.com/mantovunas/analista-desporto/commits/main/historico">ver o histórico de alterações</a>.
+</footer>
+</div>
+
+<script>
+"use strict";
+const REPO = "mantovunas/analista-desporto";
+const ON_PAGES = /github\.io$/.test(location.hostname);
+const base = ON_PAGES ? `https://raw.githubusercontent.com/${REPO}/main/historico/` : "historico/";
+const TZ = "Europe/Lisbon";
+const C = {home:"var(--home)", draw:"var(--draw)", away:"var(--away)"};
+const PAL = ["#2f6fd6","#d9a300","#2e9e4f","#d64545","#8a5cd0","#14a5a5","#e07b2a"];
+
+function parseCSV(t){
+  const rows=[];let row=[],f="",q=false;
+  for(let i=0;i<t.length;i++){
+    const c=t[i];
+    if(q){ if(c==='"'){ if(t[i+1]==='"'){f+='"';i++} else q=false } else f+=c }
+    else if(c==='"') q=true;
+    else if(c===","){row.push(f);f=""}
+    else if(c==="\n"){row.push(f);rows.push(row);row=[];f=""}
+    else if(c!=="\r") f+=c;
+  }
+  if(f!==""||row.length){row.push(f);rows.push(row)}
+  const h=rows.shift()||[];
+  return rows.filter(r=>r.length>1).map(r=>Object.fromEntries(h.map((k,i)=>[k,r[i]??""])));
+}
+async function load(name){
+  try{
+    const r=await fetch(base+name+"?t="+Math.floor(Date.now()/60000));
+    if(!r.ok) return [];
+    return parseCSV(await r.text());
+  }catch(e){return []}
+}
+const num=x=>{const v=parseFloat(x);return Number.isFinite(v)?v:null};
+const pct=x=>Math.round(x*100)+"%";
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const short=t=>t.replace(/^1\.\s*/,"").replace(/\b(FC|CF|AFC|SAD|AC|SC|CD|AS|RC|RCD|OGC|SS|SSC|US|TSG|VfB|VfL|SV|RB)\b\.?/g," ").replace(/\s+/g," ").trim()||t;
+const fmtDay=d=>new Intl.DateTimeFormat("pt-PT",{weekday:"long",day:"numeric",month:"long",timeZone:TZ}).format(d);
+const fmtHour=d=>new Intl.DateTimeFormat("pt-PT",{hour:"2-digit",minute:"2-digit",timeZone:TZ}).format(d);
+const dayKey=d=>new Intl.DateTimeFormat("sv-SE",{timeZone:TZ}).format(d);
+const tri=(r,a,b,c)=>{const v=[num(r[a]),num(r[b]),num(r[c])];return v.includes(null)?null:v};
+const fin=r=>tri(r,"fH","fD","fA")||tri(r,"pH","pD","pA");
+const resIdx=r=>{const h=+r.golos_casa,a=+r.golos_fora;return h>a?0:(h===a?1:2)};
+const argmax=v=>v.indexOf(Math.max(...v));
+const empty=m=>`<div class="empty">${m}</div>`;
+function brier(rows,keys){
+  let s=0,n=0;
+  for(const r of rows){const p=tri(r,...keys);if(!p)continue;const y=[0,0,0];y[resIdx(r)]=1;s+=p.reduce((a,x,i)=>a+(x-y[i])**2,0);n++}
+  return n?s/n:null;
+}
+
+/* ---------- gráficos em SVG (sem bibliotecas) ---------- */
+function lineChart(series,{yMin=0,yMax=1,fmt=pct,labels=null,h=230}={}){
+  const W=420,H=h,L=38,R=14,T=10,B=24;
+  const n=Math.max(...series.map(s=>s.pts.length));
+  if(n<2) return empty("Ainda não há dados suficientes para o gráfico.");
+  const X=i=>L+(W-L-R)*(n===1?0:i/(n-1));
+  const Y=v=>T+(H-T-B)*(1-(v-yMin)/((yMax-yMin)||1));
+  let g="";
+  for(let k=0;k<=4;k++){const v=yMin+(yMax-yMin)*k/4;g+=`<line x1="${L}" x2="${W-R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${Y(v)+4}" text-anchor="end">${fmt(v)}</text>`}
+  if(labels){const step=Math.max(1,Math.ceil(labels.length/4));labels.forEach((l,i)=>{if(i%step===0||i===labels.length-1)g+=`<text x="${X(i)}" y="${H-6}" text-anchor="middle">${l}</text>`})}
+  for(const s of series){
+    const d=s.pts.map((v,i)=>v==null?null:`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(" ");
+    g+=`<polyline points="${d}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const li=s.pts.length-1;
+    if(s.pts[li]!=null) g+=`<circle cx="${X(li)}" cy="${Y(s.pts[li])}" r="4" fill="${s.color}"><title>${esc(s.name)}: ${fmt(s.pts[li])}</title></circle>`;
+  }
+  const lg=series.length>1||series[0].name?`<div class="legend">${series.map(s=>`<span style="--c:${s.color}">${esc(s.name)}</span>`).join("")}</div>`:"";
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="gráfico de linhas">${g}</svg>${lg}`;
+}
+function calibChart(points){
+  const W=360,H=300,L=40,R=12,T=10,B=34,S=Math.min(W-L-R,H-T-B);
+  const X=v=>L+S*v,Y=v=>T+S*(1-v);
+  let g="";
+  for(let k=0;k<=5;k++){const v=k/5;g+=`<line x1="${L}" x2="${L+S}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${Y(v)+4}" text-anchor="end">${pct(v)}</text><text x="${X(v)}" y="${T+S+16}" text-anchor="middle">${pct(v)}</text>`}
+  g+=`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(1)}" y2="${Y(1)}" stroke="var(--muted)" stroke-dasharray="5 4"/>`;
+  g+=`<text x="${L+S/2}" y="${H-4}" text-anchor="middle">o que o bot disse</text>`;
+  const d=points.map(p=>`${X(p.said)},${Y(p.real)}`).join(" ");
+  g+=`<polyline points="${d}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>`;
+  for(const p of points) g+=`<circle cx="${X(p.said)}" cy="${Y(p.real)}" r="${4+Math.min(6,p.n/60)}" fill="var(--accent)"><title>Disse ${pct(p.said)} · aconteceu ${pct(p.real)} (${p.n} casos)</title></circle>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="calibração" style="max-width:420px;margin:0 auto">${g}</svg>
+  <div class="muted" style="text-align:center">Quanto mais perto da linha tracejada, mais “afinado” está o bot. Eixo vertical: o que realmente aconteceu.</div>`;
+}
+
+/* ---------- secções ---------- */
+function gameCard(r){
+  const f=fin(r);if(!f) return "";
+  const k=new Date(r.inicio_utc);
+  const m=tri(r,"mH","mD","mA"), p=tri(r,"pH","pD","pA");
+  const conf={alta:"🟢 confiança alta",média:"🟡 confiança média",baixa:"🔴 confiança baixa"}[r.confianca]||"";
+  const bx=num(r.baixas_casa),by=num(r.baixas_fora);
+  return `<div class="card game">
+    <div class="top"><span>🕗 ${fmtHour(k)}</span><span>${esc(r.liga)}</span></div>
+    <div class="teams">${esc(short(r.casa))} <span class="muted">vs</span> ${esc(short(r.fora))}</div>
+    <div class="bar" role="img" aria-label="probabilidades casa, empate, fora"><i class="h" style="width:${f[0]*100}%"></i><i class="d" style="width:${f[1]*100}%"></i><i class="a" style="width:${f[2]*100}%"></i></div>
+    <div class="probs"><span>🏠 ${pct(f[0])}</span><span>🤝 ${pct(f[1])}</span><span>✈️ ${pct(f[2])}</span></div>
+    <div class="chips">
+      ${conf?`<span class="chip">${conf}</span>`:""}
+      ${num(r.xg_casa)?`<span class="chip">⚽ ${num(r.xg_casa).toFixed(1)}–${num(r.xg_fora).toFixed(1)}</span>`:""}
+      ${p?`<span class="chip">🧠 ${p.map(x=>Math.round(x*100)).join("/")}</span>`:""}
+      ${m?`<span class="chip">🏦 ${m.map(x=>Math.round(x*100)).join("/")}</span>`:""}
+      ${(bx>=3||by>=3)?`<span class="chip">🚑 muitas baixas</span>`:""}
+      ${num(r.spread)>=0.07?`<span class="chip">⚠️ casas discordam</span>`:""}
+    </div></div>`;
+}
+function renderHoje(P){
+  const now=new Date();
+  const up=P.filter(r=>r.estado==="pendente"&&new Date(r.inicio_utc)>=new Date(now-3*3600e3)).sort((a,b)=>a.inicio_utc.localeCompare(b.inicio_utc));
+  const days={};
+  up.forEach(r=>{(days[dayKey(new Date(r.inicio_utc))]??=[]).push(r)});
+  let h="";
+  const keys=Object.keys(days).slice(0,3);
+  const today=dayKey(now);
+  for(const k of keys){
+    const d=new Date(days[k][0].inicio_utc);
+    h+=`<h2>${k===today?"Hoje":fmtDay(d)}</h2>`+days[k].map(gameCard).join("");
+  }
+  if(!keys.length) h=empty("Sem jogos analisados para já. O bot publica a análise todas as manhãs.");
+  const rec=P.filter(r=>r.estado==="resolvida"&&new Date(r.inicio_utc)>new Date(now-36*3600e3)).sort((a,b)=>b.inicio_utc.localeCompare(a.inicio_utc));
+  if(rec.length){
+    h+=`<h2>Resultados recentes</h2><div class="card">`+rec.slice(0,10).map(r=>{
+      const f=fin(r),top=f?argmax(f):null,ok=top===resIdx(r);
+      return `<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> ${r.golos_casa}–${r.golos_fora} <b>${esc(short(r.fora))}</b><div class="muted">${f?`previsto: ${["casa","empate","fora"][top]} ${pct(f[top])}`:""}</div></div><div class="s ${ok?"ok":"no"}">${ok?"✅":"❌"}</div></div>`}).join("")+`</div>`;
+  }
+  return h;
+}
+function renderDesempenho(P){
+  const R=P.filter(r=>r.estado==="resolvida"&&fin(r));
+  if(R.length<5) return empty("Ainda há poucos jogos avaliados. Volta daqui a alguns dias.");
+  const hit=R.filter(r=>argmax(fin(r))===resIdx(r)).length;
+  const fav=R.filter(r=>Math.max(...fin(r))>=0.6),favOk=fav.filter(r=>argmax(fin(r))===resIdx(r)).length;
+  const bb=brier(R,["fH","fD","fA"]),bm=brier(R,["pH","pD","pA"]),bk=brier(R,["mH","mD","mA"]);
+  let h=`<div class="kpis">
+   <div class="kpi"><div class="v">${R.length}</div><div class="l">jogos avaliados</div></div>
+   <div class="kpi"><div class="v">${pct(hit/R.length)}</div><div class="l">resultado mais provável acertou</div></div>
+   <div class="kpi"><div class="v">${fav.length?pct(favOk/fav.length):"–"}</div><div class="l">favoritos claros (${favOk}/${fav.length})</div></div>
+   <div class="kpi"><div class="v">${bb?bb.toFixed(3):"–"}</div><div class="l">erro do bot (menor = melhor)</div></div></div>`;
+  h+=`<div class="card"><b>Erro médio (Brier)</b><div class="muted">Menor é melhor. Compara o bot final com o modelo sozinho e com o mercado.</div>
+   <table><tr><th></th><th>Erro</th></tr><tr><td>🤖 Bot (modelo + mercado)</td><td>${bb?bb.toFixed(3):"–"}</td></tr><tr><td>🧠 Só modelo</td><td>${bm?bm.toFixed(3):"–"}</td></tr><tr><td>🏦 Só mercado</td><td>${bk?bk.toFixed(3):"–"}</td></tr></table></div>`;
+  // acerto acumulado ao longo do tempo
+  const S=[...R].sort((a,b)=>a.inicio_utc.localeCompare(b.inicio_utc));
+  let ok=0;const acc=S.map((r,i)=>{ok+=argmax(fin(r))===resIdx(r)?1:0;return ok/(i+1)});
+  h+=`<h2>Acerto acumulado</h2><div class="card">${lineChart([{name:"% de acerto",color:"var(--accent)",pts:acc.map((v,i)=>i<4?null:v)}],{yMin:0,yMax:1,labels:S.map(r=>new Date(r.inicio_utc).toLocaleDateString("pt-PT",{day:"numeric",month:"short",timeZone:TZ}))})}</div>`;
+  // calibração
+  const pts=[];R.forEach(r=>{const p=fin(r),k=resIdx(r);p.forEach((x,i)=>pts.push([x,i===k?1:0]))});
+  const bins=[[0,.2],[.2,.4],[.4,.6],[.6,.8],[.8,1.01]].map(([lo,hi])=>{
+    const s=pts.filter(([x])=>x>=lo&&x<hi);return s.length>=10?{said:s.reduce((a,[x])=>a+x,0)/s.length,real:s.reduce((a,[,y])=>a+y,0)/s.length,n:s.length}:null}).filter(Boolean);
+  h+=`<h2>O bot está afinado?</h2><div class="card">${bins.length>=2?calibChart(bins):empty("Faltam jogos para a calibração.")}</div>`;
+  // duelo
+  let m=0,k=0,n=0;
+  for(const r of R){const a=tri(r,"pH","pD","pA"),b=tri(r,"mH","mD","mA");if(!a||!b)continue;if(Math.max(...a.map((x,i)=>Math.abs(x-b[i])))<0.08)continue;
+    const y=[0,0,0];y[resIdx(r)]=1;const ea=a.reduce((s,x,i)=>s+(x-y[i])**2,0),eb=b.reduce((s,x,i)=>s+(x-y[i])**2,0);n++;if(ea<eb)m++;else if(eb<ea)k++}
+  if(n>=3) h+=`<h2>🥊 Modelo contra mercado</h2><div class="card">Nos <b>${n}</b> jogos em que discordavam muito: <b>Modelo ${m}</b> – <b>Mercado ${k}</b>.<div class="muted">Mostra se o modelo acrescenta alguma coisa ao que as casas de apostas já sabem.</div></div>`;
+  return h;
+}
+function renderBanca(K){
+  const R=K.filter(r=>(r.estado==="ganha"||r.estado==="perdida")&&num(r.lucro)!==null).sort((a,b)=>a.inicio_utc.localeCompare(b.inicio_utc));
+  if(R.length<3) return empty("Ainda há poucas sugestões resolvidas.");
+  let c=0;const cum=R.map(r=>(c+=num(r.lucro)));
+  const wins=R.filter(r=>r.estado==="ganha").length;
+  const lo=Math.min(0,...cum),hi=Math.max(1,...cum);
+  let h=`<div class="kpis">
+   <div class="kpi"><div class="v ${c>=0?"ok":"no"}">${c>=0?"+":""}${c.toFixed(2)}</div><div class="l">unidades (1 por sugestão)</div></div>
+   <div class="kpi"><div class="v">${(c/R.length*100).toFixed(0)}%</div><div class="l">ROI</div></div>
+   <div class="kpi"><div class="v">${R.length}</div><div class="l">sugestões resolvidas</div></div>
+   <div class="kpi"><div class="v">${pct(wins/R.length)}</div><div class="l">ganhas (${wins})</div></div></div>`;
+  h+=`<div class="card"><b>Evolução da banca virtual</b>${lineChart([{name:"unidades",color:"var(--accent)",pts:cum}],{yMin:Math.floor(lo),yMax:Math.ceil(hi),fmt:v=>(v>0?"+":"")+v.toFixed(0)})}</div>`;
+  h+=`<div class="warn">Simulação: 1 unidade em cada sugestão do bot. Resultados passados não garantem nada, e com poucas sugestões a sorte pesa muito.</div>`;
+  h+=`<h2>Últimas sugestões</h2><div class="card">`+[...R].reverse().slice(0,12).map(r=>`<div class="res"><div class="m"><b>${esc(r.sugestao)}</b> @ ${num(r.odd)?.toFixed(2)}<div class="muted">${esc(short(r.casa))} ${r.golos_casa}–${r.golos_fora} ${esc(short(r.fora))}</div></div><div class="s ${r.estado==="ganha"?"ok":"no"}">${num(r.lucro)>0?"+":""}${num(r.lucro).toFixed(2)}</div></div>`).join("")+`</div>`;
+  return h;
+}
+function renderEpoca(S){
+  if(!S.length) return empty("A corrida da época é publicada às segundas-feiras.");
+  const leagues=[...new Set(S.map(r=>r.liga))];
+  const st=renderEpoca.st||(renderEpoca.st={liga:leagues[0],met:"p_titulo"});
+  if(!leagues.includes(st.liga)) st.liga=leagues[0];
+  const rows=S.filter(r=>r.liga===st.liga),dates=[...new Set(rows.map(r=>r.data))].sort();
+  const by={};rows.forEach(r=>{(by[r.equipa]??={})[r.data]=num(r[st.met])});
+  const last=dates[dates.length-1],prev=dates[dates.length-2];
+  const teams=Object.keys(by).sort((a,b)=>(by[b][last]??0)-(by[a][last]??0));
+  const topN=st.met==="p_descida"?6:6;
+  const ser=teams.slice(0,topN).map((t,i)=>({name:short(t),color:PAL[i%PAL.length],pts:dates.map(d=>by[t][d]??null)}));
+  const mx=Math.max(.1,...ser.flatMap(s=>s.pts.filter(v=>v!=null)));
+  const name={p_titulo:"campeão",p_champions:"Champions",p_descida:"descida"}[st.met];
+  let h=`<select id="selL" aria-label="Liga">${leagues.map(l=>`<option ${l===st.liga?"selected":""}>${esc(l)}</option>`).join("")}</select>
+   <select id="selM" aria-label="Métrica"><option value="p_titulo" ${st.met==="p_titulo"?"selected":""}>Ser campeão</option><option value="p_champions" ${st.met==="p_champions"?"selected":""}>Champions</option><option value="p_descida" ${st.met==="p_descida"?"selected":""}>Descer</option></select>`;
+  h+=`<div class="card"><b>Probabilidade de ${name}</b><div class="muted">Simulação semanal da época. Atualizado em ${new Date(last+"T12:00:00").toLocaleDateString("pt-PT",{day:"numeric",month:"long"})}.</div>${lineChart(ser,{yMin:0,yMax:[.04,.08,.2,.4,.8,1].find(v=>v>=mx)||1,labels:dates.map(d=>new Date(d+"T12:00:00").toLocaleDateString("pt-PT",{day:"numeric",month:"short"}))})}</div>`;
+  h+=`<div class="card"><table><tr><th>Equipa</th><th>${name}</th><th>Δ semana</th><th>Pts esp.</th></tr>`+teams.map(t=>{
+    const v=by[t][last],p=prev?by[t][prev]:null,d=(v!=null&&p!=null)?(v-p)*100:null;
+    const pts=num(rows.find(r=>r.equipa===t&&r.data===last)?.pts_esperados);
+    return `<tr><td>${esc(short(t))}</td><td>${v!=null?(v*100).toFixed(v<.1?1:0)+"%":"–"}</td><td class="${d>0.4?"ok":(d<-0.4?"no":"")}">${d==null?"–":(d>0.4?"▲ ":(d<-0.4?"▼ ":""))+Math.abs(d).toFixed(1)}</td><td>${pts??"–"}</td></tr>`}).join("")+`</table></div>`;
+  return h;
+}
+function renderJogos(P){
+  const R=P.filter(r=>r.estado==="resolvida"&&fin(r)).sort((a,b)=>b.inicio_utc.localeCompare(a.inicio_utc));
+  if(!R.length) return empty("Ainda não há jogos resolvidos.");
+  const leagues=["Todas",...new Set(R.map(r=>r.liga))];
+  const st=renderJogos.st||(renderJogos.st={liga:"Todas"});
+  const rows=R.filter(r=>st.liga==="Todas"||r.liga===st.liga);
+  let h=`<select id="selJ" aria-label="Liga">${leagues.map(l=>`<option ${l===st.liga?"selected":""}>${esc(l)}</option>`).join("")}</select>`;
+  h+=`<div class="card">`+rows.slice(0,60).map(r=>{
+    const f=fin(r),top=argmax(f),ok=top===resIdx(r),d=new Date(r.inicio_utc);
+    return `<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> ${r.golos_casa}–${r.golos_fora} <b>${esc(short(r.fora))}</b><div class="muted">${d.toLocaleDateString("pt-PT",{day:"numeric",month:"short",timeZone:TZ})} · ${esc(r.liga)} · previsto ${["casa","empate","fora"][top]} ${pct(f[top])}</div></div><div class="s ${ok?"ok":"no"}">${ok?"✅":"❌"}</div></div>`}).join("")+`</div>`;
+  if(rows.length>60) h+=`<div class="muted">A mostrar os 60 mais recentes de ${rows.length}.</div>`;
+  return h;
+}
+
+/* ---------- arranque ---------- */
+let DATA={};
+function draw(){
+  document.getElementById("hoje").innerHTML=renderHoje(DATA.P);
+  document.getElementById("desempenho").innerHTML=renderDesempenho(DATA.P);
+  document.getElementById("banca").innerHTML=renderBanca(DATA.K);
+  document.getElementById("epoca").innerHTML=renderEpoca(DATA.S);
+  document.getElementById("jogos").innerHTML=renderJogos(DATA.P);
+  const a=document.getElementById("selL"),b=document.getElementById("selM"),c=document.getElementById("selJ");
+  if(a) a.onchange=()=>{renderEpoca.st.liga=a.value;draw()};
+  if(b) b.onchange=()=>{renderEpoca.st.met=b.value;draw()};
+  if(c) c.onchange=()=>{renderJogos.st.liga=c.value;draw()};
+}
+document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b===btn));
+  document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id===btn.dataset.t));
+  try{history.replaceState(null,"","#"+btn.dataset.t)}catch(e){}
+  window.scrollTo(0,0);
+});
+(async()=>{
+  const [P,K,S]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv")]);
+  DATA={P,K,S};draw();
+  const last=P.map(r=>r.enviado_em).filter(Boolean).sort().pop();
+  document.getElementById("upd").textContent=last?"Última análise: "+new Date(last).toLocaleString("pt-PT",{dateStyle:"long",timeStyle:"short",timeZone:TZ}):"Ainda sem dados";
+  const h=location.hash.slice(1);const b=document.querySelector(`nav button[data-t="${h}"]`);if(b)b.click();
+})();
+</script>
+</body>
+</html>
