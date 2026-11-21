@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       jogo:
-        description: "Nome de uma das equipas do jogo (ex.: Benfica). O jogo tem de ter aparecido na mensagem das 9h."
-        required: true
+        description: "Opcional. Nome de uma das equipas (ex.: Benfica). Em branco = o jogo mais votado na sondagem de hoje, se começar dentro de 15 min."
+        required: false
 
 permissions:
   contents: read
