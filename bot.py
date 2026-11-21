@@ -618,9 +618,9 @@ def why_line(g):
             f"{esc(g['away'])} {tag(w['att_a'])} / {tag(w['def_a'])} (defesa acima de 1 = sofre mais)")
 
 
-INJ_WARN = 3
+INJ_WARN = 3           # 3+ baixas numa equipa: a confiança desce um nível
 SPREAD_WARN = 0.07     # casas discordam >= 7 pontos num resultado: confiança desce
-DUEL_GAP = 0.08        # 'grande desacordo' modelo vs mercado (diferença máx. numa probabilidade)  # 3+ baixas numa equipa: a confiança desce um nível
+DUEL_GAP = 0.08        # 'grande desacordo' modelo vs mercado (diferença máx. numa probabilidade)
 AF_LEAGUES = {"PL": 39, "ELC": 40, "PD": 140, "SA": 135, "BL1": 78, "FL1": 61, "PPL": 94, "DED": 88, "CL": 2}
 
 
@@ -1344,6 +1344,112 @@ def results_night(now):
     telegram(blocks)
 
 
+# ---------- onzes iniciais (modo "onze") ----------
+ONZE_FILE = f"{HIST_DIR}/onzes.txt"
+ONZE_WINDOW_MIN = 75      # só jogos que começam nos próximos 75 minutos
+ONZE_MAX_REQ = 25         # pedidos à API-Football por execução (limite grátis: 100/dia)
+ONZE_ROTATION = 4         # tantas mudanças face ao jogo anterior = "muita rotação"
+
+
+def af_get(path, params):
+    r = requests.get("https://v3.football.api-sports.io/" + path,
+                     headers={"x-apisports-key": AF_KEY}, params=params, timeout=30)
+    data = r.json()
+    if r.status_code != 200 or data.get("errors"):
+        print("API-Football:", path, r.status_code, str(data.get("errors"))[:200], file=sys.stderr)
+        return []
+    return data.get("response", [])
+
+
+def af_lineup(fixture_id):
+    """{id_equipa: {"nome","formacao","xi":[(id,nome)]}} — vazio se ainda não há onzes."""
+    out = {}
+    for it in af_get("fixtures/lineups", {"fixture": fixture_id}):
+        xi = [(p["player"]["id"], p["player"]["name"]) for p in it.get("startXI", [])]
+        if xi:
+            out[it["team"]["id"]] = {"nome": it["team"]["name"], "formacao": it.get("formation") or "", "xi": xi}
+    return out
+
+
+def onze_line(side_icon, team, lu, prev_ids):
+    names = ", ".join(esc(n.split()[-1]) for _, n in lu["xi"])
+    form = f" ({lu['formacao']})" if lu["formacao"] else ""
+    line = f"{side_icon} <b>{esc(team)}</b>{form}\n{names}"
+    if prev_ids:
+        ch = sum(1 for i, _ in lu["xi"] if i not in prev_ids)
+        warn = " ⚠️ muita rotação" if ch >= ONZE_ROTATION else ""
+        line += f"\n🔄 {ch} mudança(s) face ao jogo anterior{warn}"
+    return line
+
+
+def lineups_mode(now):
+    """Envia o onze inicial dos jogos analisados que começam daqui a pouco (se já estiver publicado)."""
+    if not AF_KEY:
+        print("Sem APIFOOTBALL_KEY; nada a fazer.", file=sys.stderr)
+        return
+    preds = read_csv(PREDS_FILE)
+    sent = set(open(ONZE_FILE, encoding="utf-8").read().split("\n")) if os.path.exists(ONZE_FILE) else set()
+    lim = now + dt.timedelta(minutes=ONZE_WINDOW_MIN)
+    todo = [r for r in preds if r.get("estado") == "pendente" and r["id"] not in sent
+            and now - dt.timedelta(minutes=5) <= parse_iso(r["inicio_utc"]) <= lim]
+    if not todo:
+        print("Sem jogos a começar nos próximos minutos.", file=sys.stderr)
+        return
+    code_of = {v[0]: k for k, v in LEAGUES.items()}
+    season = season_start(now.date())
+    reqs = [0]
+
+    def get(path, params):
+        reqs[0] += 1
+        return af_get(path, params)
+
+    fx_cache, blocks, newly = {}, [], []
+    for r in sorted(todo, key=lambda r: r["inicio_utc"]):
+        if reqs[0] >= ONZE_MAX_REQ:
+            break
+        code = code_of.get(r["liga"])
+        if code not in AF_LEAGUES:
+            continue
+        try:
+            day = parse_iso(r["inicio_utc"]).date().isoformat()
+            if (code, day) not in fx_cache:
+                fx_cache[(code, day)] = get("fixtures", {"league": AF_LEAGUES[code], "season": season, "date": day})
+            fixtures = fx_cache[(code, day)]
+            names = [f["teams"]["home"]["name"] for f in fixtures]
+            hn = match_team(r["casa"], names, 0.72)
+            fx = next((f for f in fixtures if f["teams"]["home"]["name"] == hn), None) if hn else None
+            if not fx:
+                continue
+            reqs[0] += 1
+            lu = af_lineup(fx["fixture"]["id"])
+            hid, aid = fx["teams"]["home"]["id"], fx["teams"]["away"]["id"]
+            if hid not in lu or aid not in lu:
+                continue  # onzes ainda não publicados: tenta na próxima execução
+            prev = {}
+            for tid in (hid, aid):
+                if reqs[0] >= ONZE_MAX_REQ:
+                    break
+                last = get("fixtures", {"team": tid, "last": 1})
+                if last:
+                    reqs[0] += 1
+                    pl = af_lineup(last[0]["fixture"]["id"])
+                    prev[tid] = {i for i, _ in pl.get(tid, {}).get("xi", [])}
+            blocks.append(f"📋 <b>ONZES INICIAIS</b> · 🕗 <i>{fmt_time(r['inicio_utc'])}</i>\n"
+                          f"<b>{esc(r['casa'])}</b> vs <b>{esc(r['fora'])}</b>\n\n"
+                          + onze_line("🏠", r["casa"], lu[hid], prev.get(hid)) + "\n\n"
+                          + onze_line("✈️", r["fora"], lu[aid], prev.get(aid))
+                          + "\n<i>(informativo: as probabilidades não mudam)</i>")
+            newly.append(r["id"])
+        except Exception as e:  # noqa: BLE001
+            print("Onzes falharam:", r.get("casa"), e, file=sys.stderr)
+    print(f"Onzes: {len(blocks)} jogo(s), {reqs[0]} pedidos.", file=sys.stderr)
+    if blocks:
+        telegram(blocks)
+        os.makedirs(HIST_DIR, exist_ok=True)
+        with open(ONZE_FILE, "a", encoding="utf-8") as f:
+            f.write("\n".join(newly) + "\n")
+
+
 def main(now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if os.getenv("MODO", "").strip().lower() == "simulacao":
@@ -1360,6 +1466,12 @@ def main(now=None):
                 telegram(sb)
         except Exception as e:  # noqa: BLE001
             print("Modo simulação falhou:", e, file=sys.stderr)
+        return
+    if os.getenv("MODO", "").strip().lower() == "onze":
+        try:
+            lineups_mode(now)
+        except Exception as e:  # noqa: BLE001
+            print("Modo onze falhou:", e, file=sys.stderr)
         return
     if os.getenv("MODO", "").strip().lower() == "resultados":
         try:
