@@ -94,7 +94,7 @@ PICK_FIELDS = [
 PRED_FIELDS = [
     "id", "enviado_em", "liga", "casa", "fora", "fd_casa", "fd_fora", "inicio_utc",
     "pH", "pD", "pA", "pO25", "pBTTS", "mH", "mD", "mA", "fH", "fD", "fA", "nb",
-    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora", "m0H", "m0D", "m0A", "baixas_casa", "baixas_fora",
+    "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora", "m0H", "m0D", "m0A", "baixas_casa", "baixas_fora", "spread",
 ]
 
 LISBON = ZoneInfo("Europe/Lisbon")
@@ -353,7 +353,9 @@ def consensus(ev):
                         elif o["name"] == "Under": un = o["price"]
                 if ov and un:
                     tot.append(devig((ov, un))[0])
-    res = {"h2h": None, "o25": None, "n": len(h2h), "nt": len(tot)}
+    res = {"h2h": None, "o25": None, "n": len(h2h), "nt": len(tot), "spread": 0.0}
+    if len(h2h) >= 3:
+        res["spread"] = max(max(x[i] for x in h2h) - min(x[i] for x in h2h) for i in range(3))
     if h2h:
         res["h2h"] = tuple(sum(x[i] for x in h2h) / len(h2h) for i in range(3))  # H, D, A
     if tot:
@@ -417,6 +419,9 @@ def analyse_event(ev, st):
     final_o = wt * p["O25"] + (1 - wt) * mk["o25"] if mk["o25"] is not None else p["O25"]
     nmin = min(st["n"][home], st["n"][away])
     conf = "alta" if nmin >= 10 else ("média" if nmin >= MIN_GAMES else "baixa")
+    spread_warn = mk["spread"] >= SPREAD_WARN
+    if spread_warn:
+        conf = {"alta": "média", "média": "baixa"}.get(conf, conf)
 
     labels = {"H": f"Vitória {ev['home_team']}", "D": "Empate", "A": f"Vitória {ev['away_team']}",
               "O": "Mais de 2.5 golos", "U": "Menos de 2.5 golos"}
@@ -441,6 +446,7 @@ def analyse_event(ev, st):
         "p": p, "model": model, "market": mk["h2h"], "final": final, "final_o": final_o,
         "why": {"att_h": st["att"][home], "def_h": st["def"][home], "att_a": st["att"][away], "def_a": st["def"][away]},
         "nb": mk["n"], "conf": conf, "picks": picks,
+        "spread": mk["spread"], "spread_warn": spread_warn,
         "books": sorted({b["title"] for b in ev.get("bookmakers", [])}),
         "has_pref": any(b["key"] == BOOKMAKER for b in ev.get("bookmakers", [])),
         "odds": pick_odds(ev),
@@ -540,6 +546,7 @@ def log_new(picks, preds, all_results, shown, now):
                 "confianca": g["conf"], "inicio_utc": g["time"],
                 "baixas_casa": len(g["inj"]["home"]) if g.get("inj") else "",
                 "baixas_fora": len(g["inj"]["away"]) if g.get("inj") else "",
+                "spread": f"{g.get('spread', 0):.3f}",
             }
             old = by_id.get(g["id"])
             if old is None:
@@ -611,7 +618,9 @@ def why_line(g):
             f"{esc(g['away'])} {tag(w['att_a'])} / {tag(w['def_a'])} (defesa acima de 1 = sofre mais)")
 
 
-INJ_WARN = 3  # 3+ baixas numa equipa: a confiança desce um nível
+INJ_WARN = 3
+SPREAD_WARN = 0.07     # casas discordam >= 7 pontos num resultado: confiança desce
+DUEL_GAP = 0.08        # 'grande desacordo' modelo vs mercado (diferença máx. numa probabilidade)  # 3+ baixas numa equipa: a confiança desce um nível
 AF_LEAGUES = {"PL": 39, "ELC": 40, "PD": 140, "SA": 135, "BL1": 78, "FL1": 61, "PPL": 94, "DED": 88, "CL": 2}
 
 
@@ -706,7 +715,9 @@ def game_block(g):
         detail = (f"🧠 Modelo {pct3(g['model'])} · 🏦 Mercado {mk}\n"
                   f"🎯 Resultados mais prováveis: {scores}\n"
                   f"Ambas marcam: {p['BTTS']:.0%} · 📚 {g['nb']} casa(s) · {pref}")
-        for extra_line in (why_line(g), inj_line(g)):
+        spread_note = (f"⚠️ As casas discordam entre si ({g['spread'] * 100:.0f} pontos): confiança reduzida."
+                       if g.get("spread_warn") else "")
+        for extra_line in (why_line(g), spread_note, inj_line(g)):
             if extra_line:
                 detail += "\n" + extra_line
     # os detalhes ficam escondidos: toca para abrir
@@ -766,6 +777,31 @@ def favourite_streaks(preds):
     return cur, best, len(rows)
 
 
+def duel(rows):
+    """Nos jogos com grande desacordo modelo vs mercado, quem esteve mais perto do resultado (erro de Brier por jogo)."""
+    m = k = n = 0
+    for r in rows:
+        if r.get("estado") != "resolvida":
+            continue
+        a, b = _trio(r, "pH", "pD", "pA"), _trio(r, "mH", "mD", "mA")
+        if a is None or b is None or max(abs(x - y) for x, y in zip(a, b)) < DUEL_GAP:
+            continue
+        y = [0.0, 0.0, 0.0]
+        y[_result_idx(r)] = 1.0
+        ea, eb = sum((p - q) ** 2 for p, q in zip(a, y)), sum((p - q) ** 2 for p, q in zip(b, y))
+        n += 1
+        if ea < eb: m += 1
+        elif eb < ea: k += 1
+    return m, k, n
+
+
+def duel_line(rows, label):
+    m, k, n = duel(rows)
+    if n < 3:
+        return None
+    return f"🥊 {label} (modelo e mercado discordavam muito, {n} jogos): Modelo {m} – Mercado {k}"
+
+
 def weekly_block(picks, preds, now):
     """Resumo dos últimos 7 dias (enviado às segundas-feiras)."""
     lo = now - dt.timedelta(days=7)
@@ -789,6 +825,10 @@ def weekly_block(picks, preds, now):
     if wk:
         profit = sum(float(r["lucro"]) for r in wk)
         lines.append(f"🎯 Sugestões: {len(wk)} resolvidas · {profit:+.2f} unidades (ROI {profit / len(wk):+.0%})")
+    for rows_, lab in ((rp, "Semana"), ([r for r in preds], "Desde o início")):
+        dl = duel_line(rows_, lab)
+        if dl:
+            lines.append(dl)
     lines.append("<i>Uma semana é pouco: só dá para tirar conclusões com várias semanas.</i>")
     return "\n".join(lines)
 
