@@ -1514,6 +1514,271 @@ def lineups_mode(now):
             f.write("\n".join(newly) + "\n")
 
 
+# ---------- AO VIVO (MODO=aovivo): mensagem que se atualiza sozinha + probabilidade em tempo real ----------
+LIVE_POLL_S = 150          # segundos entre leituras (a API grátis tem 100 pedidos/dia)
+LIVE_MAX_REQ = 70          # tecto de pedidos por jogo
+LIVE_DONE = {"FT", "AET", "PEN", "PST", "CANC", "ABD", "AWD", "WO"}
+LIVE_SLEEP = time.sleep    # trocado nos testes
+
+
+def _grid(lh, la, top=9):
+    return [[pois(i, lh) * pois(j, la) for j in range(top + 1)] for i in range(top + 1)]
+
+
+def _hda(lh, la, gh=0, ga=0):
+    g = _grid(lh, la)
+    h = d = a = 0.0
+    for i, row in enumerate(g):
+        for j, pr in enumerate(row):
+            diff = gh + i - (ga + j)
+            if diff > 0: h += pr
+            elif diff == 0: d += pr
+            else: a += pr
+    t = h + d + a
+    return h / t, d / t, a / t
+
+
+def calibrate_lambdas(lh, la, target):
+    """Ajusta os golos esperados para que o 1X2 pré-jogo coincida com a probabilidade final do bot (modelo+mercado)."""
+    best, bl = None, (lh, la)
+    for ka in range(30, 171, 4):
+        for kb in range(30, 171, 4):
+            a, b = lh * ka / 100, la * kb / 100
+            p = _hda(a, b)
+            e = sum((x - y) ** 2 for x, y in zip(p, target))
+            if best is None or e < best:
+                best, bl = e, (a, b)
+    return bl
+
+
+def live_probs(lh, la, gh, ga, minute, red_h=0, red_a=0):
+    """1X2 a partir do resultado atual e do tempo que falta (golos restantes ~ Poisson; cartão vermelho: heurística)."""
+    r = max(90 - minute, 0) / 90
+    r = r if minute < 90 else 0.03  # compensações
+    fh = (0.75 ** red_h) * (1.25 ** red_a)
+    fa = (0.75 ** red_a) * (1.25 ** red_h)
+    return _hda(lh * r * fh, la * r * fa, gh, ga)
+
+
+def parse_live(item, home_id):
+    fx, goals, events = item.get("fixture", {}), item.get("goals", {}), item.get("events") or []
+    st = fx.get("status", {})
+    out = {"status": st.get("short", ""), "minute": st.get("elapsed") or 0,
+           "gh": goals.get("home") or 0, "ga": goals.get("away") or 0, "goals": [], "red_h": 0, "red_a": 0}
+    for e in events:
+        is_home = e.get("team", {}).get("id") == home_id
+        t, d = e.get("type"), e.get("detail") or ""
+        tm = (e.get("time", {}).get("elapsed") or 0) + (e.get("time", {}).get("extra") or 0)
+        if t == "Goal" and "Missed" not in d:
+            own = "Own" in d
+            out["goals"].append((tm, is_home != own, e.get("player", {}).get("name") or "", d))
+        elif t == "Card" and "Red" in d:
+            out["red_h" if is_home else "red_a"] += 1
+    return out
+
+
+def spark(vals, n=14):
+    if not vals:
+        return ""
+    if len(vals) > n:
+        step = len(vals) / n
+        vals = [vals[int(i * step)] for i in range(n)]
+    return "".join(SPARK[min(7, int(v * 8))] for v in vals)  # 0-100% -> 8 níveis
+
+
+def live_text(home, away, kick, st, probs, pre, hist, events_txt):
+    status = st["status"]
+    if status in LIVE_DONE:
+        head = "🏁 <b>TERMINADO</b>"
+    elif status == "HT":
+        head = "⏸ <b>INTERVALO</b>"
+    elif status in ("NS", "TBD", ""):
+        head = f"⏳ <b>VAI COMEÇAR</b> · 🕗 {fmt_time(kick)}"
+    else:
+        head = f"🔴 <b>AO VIVO · {st['minute']}'</b>"
+    lines = [head, f"<b>{esc(home)} {st['gh']}–{st['ga']} {esc(away)}</b>", probs_line(probs),
+             f"<i>Antes do jogo: {pre[0]:.0%} / {pre[1]:.0%} / {pre[2]:.0%}</i>"]
+    if len(hist) >= 2:
+        lines.append(f"📈 {esc(short_name(home))} {spark([h[1] for h in hist])}\n"
+                     f"📉 {esc(short_name(away))} {spark([h[3] for h in hist])}")
+    if events_txt:
+        lines.append("\n".join(events_txt[-8:]))
+    if st["red_h"] or st["red_a"]:
+        lines.append(f"🟥 Expulsões: {esc(short_name(home))} {st['red_h']} · {esc(short_name(away))} {st['red_a']}")
+    return "\n".join(lines)
+
+
+def tg_send(text, parse="HTML"):
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                      json={"chat_id": TG_CHAT, "text": text, "parse_mode": parse, "disable_web_page_preview": True}, timeout=30)
+    r.raise_for_status()
+    return r.json()["result"]["message_id"]
+
+
+def tg_edit(mid, text):
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+                      json={"chat_id": TG_CHAT, "message_id": mid, "text": text, "parse_mode": "HTML",
+                            "disable_web_page_preview": True}, timeout=30)
+    if r.status_code == 400 and "not modified" in r.text:
+        return
+    r.raise_for_status()
+
+
+def live_chart_url(home, away, hist, goals):
+    """Gráfico da probabilidade ao longo do jogo (QuickChart, grátis). Devolve o URL da imagem ou None."""
+    if len(hist) < 3:
+        return None
+    pts = hist if len(hist) <= 60 else hist[:: len(hist) // 60 + 1] + [hist[-1]]
+    def line(label, idx, color):
+        return {"label": label, "data": [{"x": p[0], "y": round(p[idx] * 100)} for p in pts],
+                "borderColor": color, "backgroundColor": color, "showLine": True, "fill": False,
+                "pointRadius": 0, "borderWidth": 3, "lineTension": 0.25}
+    gl = []
+    for tm, is_home, player, _ in goals:
+        near = min(hist, key=lambda p: abs(p[0] - tm))
+        gl.append({"x": tm, "y": round(near[1 if is_home else 3] * 100)})
+    ds = [line(short_name(home), 1, "#2e9e4f"), line("Empate", 2, "#e0a800"), line(short_name(away), 3, "#2f6fd6")]
+    if gl:
+        ds.append({"label": "⚽ Golo", "data": gl, "showLine": False, "pointRadius": 9, "pointStyle": "star",
+                   "borderColor": "#000", "backgroundColor": "#fff"})
+    cfg = {"type": "scatter", "data": {"datasets": ds},
+           "options": {"title": {"display": True, "text": f"{short_name(home)} vs {short_name(away)} — probabilidade ao vivo", "fontSize": 18},
+                       "scales": {"xAxes": [{"type": "linear", "ticks": {"min": 0, "max": max(90, int(hist[-1][0])), "stepSize": 15},
+                                             "scaleLabel": {"display": True, "labelString": "minuto"}}],
+                                  "yAxes": [{"ticks": {"min": 0, "max": 100}, "scaleLabel": {"display": True, "labelString": "%"}}]}}}
+    r = requests.post("https://quickchart.io/chart/create",
+                      json={"chart": cfg, "width": 900, "height": 480, "backgroundColor": "white", "version": "2"}, timeout=30)
+    d = r.json()
+    return d.get("url") if r.status_code == 200 and d.get("success") else None
+
+
+def pick_live_game(preds, text, now):
+    t = norm(text)
+    best = None
+    for r in preds:
+        if t and t not in norm(r["casa"]) and t not in norm(r["fora"]):
+            continue
+        k = parse_iso(r["inicio_utc"])
+        if not (now - dt.timedelta(hours=3) <= k <= now + dt.timedelta(hours=14)):
+            continue
+        if best is None or abs((k - now).total_seconds()) < abs((parse_iso(best["inicio_utc"]) - now).total_seconds()):
+            best = r
+    return best
+
+
+def live_mode(now):
+    if not AF_KEY:
+        print("Sem APIFOOTBALL_KEY.", file=sys.stderr)
+        return
+    preds = read_csv(PREDS_FILE)
+    r = pick_live_game(preds, os.getenv("JOGO", ""), now)
+    if not r:
+        print("Jogo não encontrado no histórico (tem de ter sido analisado na mensagem das 9h).", file=sys.stderr)
+        return
+    code = {v[0]: k for k, v in LEAGUES.items()}.get(r["liga"])
+    kick = parse_iso(r["inicio_utc"])
+    reqs = [0]
+
+    def get(path, params):
+        reqs[0] += 1
+        return af_get(path, params)
+
+    fixtures = get("fixtures", {"league": AF_LEAGUES[code], "season": season_start(kick.date()), "date": kick.date().isoformat()})
+    hn = match_team(r["casa"], [f["teams"]["home"]["name"] for f in fixtures], 0.72)
+    fx = next((f for f in fixtures if f["teams"]["home"]["name"] == hn), None) if hn else None
+    if not fx:
+        print("Jogo não encontrado na API-Football.", file=sys.stderr)
+        return
+    fid, home_id = fx["fixture"]["id"], fx["teams"]["home"]["id"]
+    pre = _trio(r, "fH", "fD", "fA") or _trio(r, "pH", "pD", "pA")
+    lh0, la0 = fnum(r.get("xg_casa")) or 1.4, fnum(r.get("xg_fora")) or 1.1
+    lh, la = calibrate_lambdas(lh0, la0, pre)
+    # espera pelo apito inicial
+    while now_utc() < kick - dt.timedelta(minutes=2):
+        LIVE_SLEEP(min(60, max(1, (kick - now_utc()).total_seconds())))
+    st0 = {"status": "NS", "minute": 0, "gh": 0, "ga": 0, "red_h": 0, "red_a": 0}
+    mid = tg_send(live_text(r["casa"], r["fora"], r["inicio_utc"], st0, pre, pre, [], []))
+    hist, seen, ev_lines, last_txt, st = [(0, *pre)], 0, [], "", st0
+    prev = pre
+    while reqs[0] < LIVE_MAX_REQ:
+        LIVE_SLEEP(LIVE_POLL_S)
+        try:
+            items = get("fixtures", {"id": fid})
+            if not items:
+                continue
+            st = parse_live(items[0], home_id)
+            probs = live_probs(lh, la, st["gh"], st["ga"], 45 if st["status"] == "HT" else st["minute"], st["red_h"], st["red_a"])
+            swing = probs  # para os avisos de golo (não o 100% do apito final)
+            if st["status"] in LIVE_DONE:
+                probs = (1.0, 0.0, 0.0) if st["gh"] > st["ga"] else ((0.0, 1.0, 0.0) if st["gh"] == st["ga"] else (0.0, 0.0, 1.0))
+            if st["status"] not in ("NS", "TBD"):
+                hist.append((st["minute"], *probs))
+            for tm, is_home, player, d in st["goals"][seen:]:
+                who = r["casa"] if is_home else r["fora"]
+                pen = " (p.b.)" if "Own" in d else (" (g.p.)" if "Penalty" in d else "")
+                ev_lines.append(f"⚽ {tm}' {esc(player)} ({esc(short_name(who))}){pen}")
+                try:
+                    tg_send(f"⚽ <b>GOLO! {esc(r['casa'])} {st['gh']}–{st['ga']} {esc(r['fora'])}</b> · {tm}'\n"
+                            f"{esc(player)} ({esc(short_name(who))}){pen}\n"
+                            f"{esc(short_name(r['casa']))}: {prev[0]:.0%} → {swing[0]:.0%} · {esc(short_name(r['fora']))}: {prev[2]:.0%} → {swing[2]:.0%}")
+                except Exception as e:  # noqa: BLE001
+                    print("Aviso de golo falhou:", e, file=sys.stderr)
+            seen = len(st["goals"])
+            prev = swing
+            txt = live_text(r["casa"], r["fora"], r["inicio_utc"], st, probs, pre, hist, ev_lines)
+            if txt != last_txt:
+                tg_edit(mid, txt)
+                last_txt = txt
+        except Exception as e:  # noqa: BLE001
+            print("Leitura ao vivo falhou:", e, file=sys.stderr)
+        if st["status"] in LIVE_DONE:
+            break
+    try:
+        url = live_chart_url(r["casa"], r["fora"], hist, st["goals"])
+        if url:
+            res = _result_idx({"golos_casa": st["gh"], "golos_fora": st["ga"]})
+            cap = (f"📊 {esc(r['casa'])} {st['gh']}–{st['ga']} {esc(r['fora'])}\nAntes do jogo o bot dava "
+                   f"{('casa', 'empate', 'fora')[res]} {pre[res]:.0%}.")
+            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
+                          json={"chat_id": TG_CHAT, "photo": url, "caption": cap, "parse_mode": "HTML"}, timeout=60).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        print("Gráfico falhou:", e, file=sys.stderr)
+    print(f"Ao vivo terminado: {reqs[0]} pedidos.", file=sys.stderr)
+
+
+def now_utc():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def api_test():
+    """MODO=testeapi: diz no Telegram o que a chave grátis da API-Football consegue fazer."""
+    out = ["🔧 <b>TESTE DA API-FOOTBALL</b>"]
+    if not AF_KEY:
+        tg_send("🔧 Sem APIFOOTBALL_KEY no GitHub.")
+        return
+    try:
+        r = requests.get("https://v3.football.api-sports.io/status", headers={"x-apisports-key": AF_KEY}, timeout=30)
+        d = r.json().get("response") or {}
+        req = d.get("requests", {})
+        out.append(f"Conta: {d.get('subscription', {}).get('plan', '?')} · pedidos hoje {req.get('current', '?')}/{req.get('limit_day', '?')}")
+    except Exception as e:  # noqa: BLE001
+        out.append(f"Estado falhou: {e}")
+    today = now_utc().date()
+    tests = [("Jogos de hoje (PL)", "fixtures", {"league": 39, "season": season_start(today), "date": today.isoformat()}),
+             ("Jogos ao vivo agora", "fixtures", {"live": "all"}),
+             ("Lesões (La Liga)", "injuries", {"league": 140, "season": season_start(today), "date": today.isoformat()})]
+    for label, path, params in tests:
+        try:
+            rr = requests.get("https://v3.football.api-sports.io/" + path, headers={"x-apisports-key": AF_KEY}, params=params, timeout=30)
+            d = rr.json()
+            err = d.get("errors")
+            n = len(d.get("response") or [])
+            out.append(f"{'✅' if n and not err else '⚠️'} {label}: {n} resultado(s)" + (f" · erro: {str(err)[:150]}" if err else ""))
+        except Exception as e:  # noqa: BLE001
+            out.append(f"❌ {label}: {e}")
+    tg_send("\n".join(out))
+
+
 def main(now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if os.getenv("MODO", "").strip().lower() == "simulacao":
@@ -1530,6 +1795,18 @@ def main(now=None):
                 telegram(sb)
         except Exception as e:  # noqa: BLE001
             print("Modo simulação falhou:", e, file=sys.stderr)
+        return
+    if os.getenv("MODO", "").strip().lower() == "aovivo":
+        try:
+            live_mode(now)
+        except Exception as e:  # noqa: BLE001
+            print("Modo ao vivo falhou:", e, file=sys.stderr)
+        return
+    if os.getenv("MODO", "").strip().lower() == "testeapi":
+        try:
+            api_test()
+        except Exception as e:  # noqa: BLE001
+            print("Teste da API falhou:", e, file=sys.stderr)
         return
     if os.getenv("MODO", "").strip().lower() == "onze":
         try:
