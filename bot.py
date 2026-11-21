@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import csv
+import json
 import math
 import time
 import html
@@ -1652,6 +1653,85 @@ def live_chart_url(home, away, hist, goals):
     return d.get("url") if r.status_code == 200 and d.get("success") else None
 
 
+# ---------- sondagem diária: o jogo ao vivo é escolhido por votação ----------
+POLL_FILE = f"{HIST_DIR}/sondagem.json"
+FAMOUS = ["benfica", "porto", "sporting", "braga", "real madrid", "barcelona", "atletico", "athletic", "sevilla",
+          "manchester city", "manchester united", "liverpool", "arsenal", "chelsea", "tottenham", "newcastle", "aston villa",
+          "bayern", "dortmund", "leverkusen", "paris", "marseille", "monaco", "juventus", "inter", "milan", "napoli", "roma",
+          "lazio", "atalanta", "ajax", "psv", "feyenoord", "portugal", "espanha", "spain", "franca", "france", "inglaterra",
+          "england", "alemanha", "germany", "italia", "italy", "brasil", "argentina", "croatia", "croacia"]
+LEAGUE_FAME = {"Champions League": 6, "Liga das Nações": 4, "Premier League": 3, "La Liga": 3, "Liga Portugal": 3,
+               "Serie A": 2, "Bundesliga": 2, "Ligue 1": 2}
+POLL_MIN_AHEAD_MIN = 90      # só jogos que começam daqui a mais de 90 min
+
+
+def fame_score(league, g):
+    names = norm(g["home"]) + " | " + norm(g["away"])
+    n = sum(1 for f in FAMOUS if f in norm(g["home"])) > 0, sum(1 for f in FAMOUS if f in norm(g["away"])) > 0
+    f = g.get("final") or (0.4, 0.3, 0.3)
+    return 10 * sum(n) + LEAGUE_FAME.get(league, 0) + 2 * (1 - max(f))
+
+
+def send_poll(shown, now):
+    """Depois da mensagem das 9h: sondagem com os 5 jogos mais 'famosos' do dia."""
+    cands = []
+    for league, games in shown.items():
+        for g in games:
+            if parse_iso(g["time"]) > now + dt.timedelta(minutes=POLL_MIN_AHEAD_MIN):
+                cands.append((fame_score(league, g), league, g))
+    cands.sort(key=lambda x: -x[0])
+    top = cands[:5]
+    if len(top) < 2:
+        return
+    top.sort(key=lambda x: x[2]["time"])  # por hora do jogo
+    opts, saved = [], []
+    for _, league, g in top:
+        opts.append(f"{fmt_time(g['time']).split(' · ')[-1]} · {short_name(g['home'])} vs {short_name(g['away'])}"[:100])
+        f = g.get("final") or (0.4, 0.3, 0.3)
+        p = g.get("p") or {}
+        saved.append({"casa": g["home"], "fora": g["away"], "fd_casa": g.get("fd_home", ""), "fd_fora": g.get("fd_away", ""),
+                      "inicio_utc": g["time"], "fH": f"{f[0]:.4f}", "fD": f"{f[1]:.4f}", "fA": f"{f[2]:.4f}",
+                      "xg_casa": f"{p['lh']:.2f}" if p.get("lh") else "", "xg_fora": f"{p['la']:.2f}" if p.get("la") else ""})
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPoll",
+                      json={"chat_id": TG_CHAT, "question": "🗳️ Que jogo queres ver AO VIVO hoje? (o mais votado é seguido minuto a minuto)",
+                            "options": opts, "is_anonymous": True, "allows_multiple_answers": False}, timeout=30)
+    r.raise_for_status()
+    res = r.json()["result"]
+    os.makedirs(HIST_DIR, exist_ok=True)
+    with open(POLL_FILE, "w", encoding="utf-8") as f:
+        json.dump({"date": now.date().isoformat(), "poll_id": res["poll"]["id"], "message_id": res["message_id"], "options": saved}, f)
+
+
+def read_votes(poll_id):
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                      json={"allowed_updates": ["poll"], "limit": 100}, timeout=30)
+    r.raise_for_status()
+    votes = None
+    for u in r.json().get("result", []):
+        p = u.get("poll")
+        if p and p.get("id") == poll_id:
+            votes = [o["voter_count"] for o in p["options"]]  # fica com o estado mais recente
+    return votes
+
+
+def auto_choice(now):
+    """Jogo mais votado de hoje, mas só se começar dentro de ~15 minutos (para não ficar à espera horas)."""
+    if not os.path.exists(POLL_FILE):
+        return None
+    with open(POLL_FILE, encoding="utf-8") as f:
+        d = json.load(f)
+    if d.get("date") != now.date().isoformat():
+        return None
+    votes = read_votes(d["poll_id"]) or [0] * len(d["options"])
+    best = max(range(len(votes)), key=lambda i: (votes[i], -i))
+    r = d["options"][best]
+    k = parse_iso(r["inicio_utc"])
+    print(f"Votos: {votes} → {r['casa']} vs {r['fora']}", file=sys.stderr)
+    if not (now - dt.timedelta(minutes=3) <= k <= now + dt.timedelta(minutes=16)):
+        return None
+    return r
+
+
 def find_live(items, casas, foras):
     """Procura o jogo na lista de jogos ao vivo da API (por nome das duas equipas; aceita vários nomes de cada)."""
     for it in items or []:
@@ -1680,9 +1760,10 @@ def live_mode(now):
         print("Sem APIFOOTBALL_KEY.", file=sys.stderr)
         return
     preds = read_csv(PREDS_FILE)
-    r = pick_live_game(preds, os.getenv("JOGO", ""), now)
+    jogo = os.getenv("JOGO", "").strip()
+    r = pick_live_game(preds, jogo, now) if jogo else auto_choice(now)
     if not r:
-        print("Jogo não encontrado no histórico (tem de ter sido analisado na mensagem das 9h).", file=sys.stderr)
+        print("Nenhum jogo para seguir agora." if not jogo else "Jogo não encontrado no histórico (tem de ter sido analisado na mensagem das 9h).", file=sys.stderr)
         return
     kick = parse_iso(r["inicio_utc"])
     reqs = [0]
@@ -1919,6 +2000,10 @@ def main(now=None):
         blocks.insert(2, summary)  # logo a seguir ao resumo do topo
     telegram(blocks)
     mark_sent(now)
+    try:
+        send_poll(shown, now)
+    except Exception as e:  # noqa: BLE001
+        print("Sondagem falhou:", e, file=sys.stderr)
     if sim_models:  # segunda mensagem, só às segundas-feiras
         try:
             sb = season_sim_blocks(sim_models, now.date())
