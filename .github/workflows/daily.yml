@@ -11,7 +11,7 @@ on:
   workflow_dispatch:       # botão para correr manualmente
     inputs:
       modo:
-        description: "analise (mensagem do dia), resultados (resumo da noite), simulacao (corrida da época) ou onze (onzes iniciais)"
+        description: "analise (mensagem do dia), resultados (resumo da noite), simulacao (corrida da época) onze (onzes iniciais) ou testeapi (diz o que a chave da API-Football consegue)"
         default: "analise"
         required: false
 
