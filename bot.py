@@ -1715,7 +1715,7 @@ def read_votes(poll_id):
 
 
 def auto_choice(now):
-    """Jogo mais votado de hoje, mas só se começar dentro de ~15 minutos (para não ficar à espera horas)."""
+    """Jogo mais votado de hoje, mas só se começar dentro de ~20 minutos (para não ficar à espera horas)."""
     if not os.path.exists(POLL_FILE):
         return None
     with open(POLL_FILE, encoding="utf-8") as f:
@@ -1727,7 +1727,7 @@ def auto_choice(now):
     r = d["options"][best]
     k = parse_iso(r["inicio_utc"])
     print(f"Votos: {votes} → {r['casa']} vs {r['fora']}", file=sys.stderr)
-    if not (now - dt.timedelta(minutes=3) <= k <= now + dt.timedelta(minutes=16)):
+    if not (now - dt.timedelta(minutes=3) <= k <= now + dt.timedelta(minutes=21)):
         return None
     return r
 
