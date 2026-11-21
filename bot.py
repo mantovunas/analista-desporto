@@ -625,6 +625,9 @@ DUEL_GAP = 0.08        # 'grande desacordo' modelo vs mercado (diferença máx. 
 AF_LEAGUES = {"PL": 39, "ELC": 40, "PD": 140, "SA": 135, "BL1": 78, "FL1": 61, "PPL": 94, "DED": 88, "CL": 2}
 
 
+_AF_BLOCK = [False]
+
+
 def af_injuries(league_id, season, day):
     """Lesionados/suspensos de uma liga num dia (API-Football). Devolve [(equipa, jogador, motivo)]."""
     r = requests.get("https://v3.football.api-sports.io/injuries",
@@ -633,6 +636,8 @@ def af_injuries(league_id, season, day):
     data = r.json()
     if r.status_code != 200 or data.get("errors"):
         print("API-Football:", r.status_code, str(data.get("errors"))[:200], file=sys.stderr)
+        if "Free plans" in str(data.get("errors")):
+            _AF_BLOCK[0] = True  # plano grátis sem acesso à época atual: não insistir
         return []
     out = []
     for it in data.get("response", []):
@@ -641,30 +646,71 @@ def af_injuries(league_id, season, day):
     return out
 
 
+# ---------- lesões da Premier League: API pública do Fantasy Premier League (grátis, sem chave) ----------
+FPL_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
+FPL_MIN_MINUTES = 450      # só conta jogadores com peso (>= 450 minutos na época)
+FPL_ALIAS = {"Man City": "Manchester City", "Man Utd": "Manchester United", "Spurs": "Tottenham Hotspur",
+             "Wolves": "Wolverhampton Wanderers", "Nott'm Forest": "Nottingham Forest", "Newcastle": "Newcastle United",
+             "Brighton": "Brighton and Hove Albion", "West Ham": "West Ham United", "Leeds": "Leeds United",
+             "Leicester": "Leicester City", "Ipswich": "Ipswich Town", "Norwich": "Norwich City",
+             "Sheffield Utd": "Sheffield United", "Luton": "Luton Town"}
+_FPL_CACHE = {}
+
+
+def fpl_injuries():
+    """{equipa: {"out": [(jogador, motivo)], "doubt": [(jogador, motivo)]}} só com jogadores importantes."""
+    if "d" in _FPL_CACHE:
+        return _FPL_CACHE["d"]
+    r = requests.get(FPL_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    teams = {t["id"]: FPL_ALIAS.get(t["name"], t["name"]) for t in data["teams"]}
+    out = {}
+    for p in data["elements"]:
+        if (p.get("minutes") or 0) < FPL_MIN_MINUTES:
+            continue
+        status, chance = p.get("status"), p.get("chance_of_playing_next_round")
+        news = (p.get("news") or "").split(" - ")[0].strip()
+        t = out.setdefault(teams.get(p["team"], ""), {"out": [], "doubt": []})
+        if status in ("i", "s", "n") and (chance is None or chance <= 25):
+            t["out"].append((p["web_name"], news))
+        elif status == "d" or (chance is not None and chance < 100 and status != "a"):
+            t["doubt"].append((p["web_name"], news))
+    _FPL_CACHE["d"] = out
+    return out
+
+
 def attach_injuries(shown, league_codes, today):
-    """Junta a cada jogo mostrado a lista de baixas (só se houver chave da API-Football)."""
-    if not AF_KEY:
-        return
+    """Junta a cada jogo as baixas: Premier League via API do Fantasy (grátis); outras ligas via API-Football se o plano o permitir."""
     season = season_start(today)
     cache = {}
     for name, games in shown.items():
         code = league_codes.get(name)
-        if not code or code not in AF_LEAGUES:
-            continue
         for g in games:
-            day = parse_iso(g["time"]).date().isoformat()
-            key = (code, day)
             try:
-                if key not in cache:
-                    cache[key] = af_injuries(AF_LEAGUES[code], season, day)
-                rows = cache[key]
-                if not rows:
+                if code == "PL":
+                    fpl = fpl_injuries()
+                    th = match_team(g["home"], list(fpl), 0.72)
+                    ta = match_team(g["away"], list(fpl), 0.72)
+                    if not th and not ta:
+                        continue
+                    g["inj"] = {"home": fpl.get(th, {}).get("out", []), "away": fpl.get(ta, {}).get("out", []),
+                                "doubt_home": fpl.get(th, {}).get("doubt", []), "doubt_away": fpl.get(ta, {}).get("doubt", [])}
+                elif AF_KEY and code in AF_LEAGUES and not _AF_BLOCK[0]:
+                    day = parse_iso(g["time"]).date().isoformat()
+                    key = (code, day)
+                    if key not in cache:
+                        cache[key] = af_injuries(AF_LEAGUES[code], season, day)
+                    rows = cache[key]
+                    if not rows:
+                        continue
+                    teams = sorted({r[0] for r in rows})
+                    th = match_team(g["home"], teams, 0.72)
+                    ta = match_team(g["away"], teams, 0.72)
+                    g["inj"] = {"home": [(p, m) for t, p, m in rows if t == th] if th else [],
+                                "away": [(p, m) for t, p, m in rows if t == ta] if ta else []}
+                else:
                     continue
-                teams = sorted({r[0] for r in rows})
-                th = match_team(g["home"], teams, 0.72)
-                ta = match_team(g["away"], teams, 0.72)
-                g["inj"] = {"home": [(p, m) for t, p, m in rows if t == th] if th else [],
-                            "away": [(p, m) for t, p, m in rows if t == ta] if ta else []}
                 if max(len(g["inj"]["home"]), len(g["inj"]["away"])) >= INJ_WARN and not g.get("market_only"):
                     g["conf"] = {"alta": "média", "média": "baixa"}.get(g["conf"], g["conf"])
                     g["inj_warn"] = True
@@ -674,7 +720,10 @@ def attach_injuries(shown, league_codes, today):
 
 def inj_line(g):
     inj = g.get("inj")
-    if not inj or not (inj["home"] or inj["away"]):
+    if not inj:
+        return ""
+    doubt = inj.get("doubt_home", []) + inj.get("doubt_away", [])
+    if not (inj["home"] or inj["away"] or doubt):
         return ""
     def fmt(lst):
         shown = ", ".join(f"{esc(p)} ({esc(m)})" if m else esc(p) for p, m in lst[:4])
@@ -682,8 +731,16 @@ def inj_line(g):
     parts = []
     if inj["home"]: parts.append(f"{esc(g['home'])}: {fmt(inj['home'])}")
     if inj["away"]: parts.append(f"{esc(g['away'])}: {fmt(inj['away'])}")
+    lines = []
+    if parts:
+        lines.append("🚑 Baixas — " + " · ".join(parts))
+    dparts = []
+    if inj.get("doubt_home"): dparts.append(f"{esc(g['home'])}: {fmt(inj['doubt_home'])}")
+    if inj.get("doubt_away"): dparts.append(f"{esc(g['away'])}: {fmt(inj['doubt_away'])}")
+    if dparts:
+        lines.append("❓ Dúvidas — " + " · ".join(dparts))
     warn = "⚠️ Muitas baixas: confiança reduzida. " if g.get("inj_warn") else ""
-    return "🚑 Baixas — " + " · ".join(parts) + "\n<i>" + warn + "(o modelo não conta lesões)</i>"
+    return "\n".join(lines) + "\n<i>" + warn + "(o modelo não conta lesões)</i>"
 
 
 LEAGUE_ICON = {"Championship": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f", "Eredivisie": "🇳🇱", "Liga Portugal": "🇵🇹", "Premier League": "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
