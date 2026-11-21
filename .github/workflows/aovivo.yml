@@ -1,0 +1,35 @@
+name: analista-aovivo
+
+on:
+  workflow_dispatch:
+    inputs:
+      jogo:
+        description: "Nome de uma das equipas do jogo (ex.: Benfica). O jogo tem de ter aparecido na mensagem das 9h."
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analista-aovivo      # grupo próprio: não bloqueia a mensagem das 9h nem os resultados da noite
+  cancel-in-progress: false
+
+jobs:
+  aovivo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python bot.py
+        env:
+          MODO: aovivo
+          JOGO: ${{ github.event.inputs.jogo }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
