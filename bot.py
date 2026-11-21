@@ -833,6 +833,36 @@ def weekly_block(picks, preds, now):
     return "\n".join(lines)
 
 
+CAL_BINS = [(0, .2), (.2, .4), (.4, .6), (.6, .8), (.8, 1.01)]
+
+
+def calibration_block(preds, min_games=60):
+    """Quando o bot diz X%, acontece X% das vezes? (todas as previsões 1X2 resolvidas)"""
+    pts = []
+    for r in preds:
+        if r.get("estado") != "resolvida":
+            continue
+        p = _final_probs(r)
+        if p is None:
+            continue
+        k = _result_idx(r)
+        pts += [(p[i], 1 if i == k else 0) for i in range(3)]
+    n_games = len(pts) // 3
+    if n_games < min_games:
+        return None
+    lines = ["📏 <b>O BOT ESTÁ AFINADO?</b>", "", f"Quando o bot diz X%, quantas vezes acontece? ({n_games} jogos)"]
+    for lo, hi in CAL_BINS:
+        sel = [(p, y) for p, y in pts if lo <= p < hi]
+        if len(sel) < 10:
+            continue
+        said = sum(p for p, _ in sel) / len(sel)
+        real = sum(y for _, y in sel) / len(sel)
+        diff = real - said
+        flag = "✅" if abs(diff) < 0.05 else ("⬆️ subestima" if diff > 0 else "⬇️ exagera")
+        lines.append(f"{lo:.0%}–{min(hi, 1):.0%}: disse {said:.0%} · aconteceu {real:.0%} {flag}")
+    return "\n".join(lines) if len(lines) > 3 else None
+
+
 def history_blocks(picks, preds, newly):
     blocks = []
     if newly:
@@ -1410,6 +1440,10 @@ def main(now=None):
             wb = weekly_block(picks_h, preds_h, now)
             if wb:
                 extra.insert(0, wb)
+            if now.astimezone(LISBON).day <= 7:  # 1.ª segunda-feira do mês
+                cb = calibration_block(preds_h)
+                if cb:
+                    extra.insert(1 if wb else 0, cb)
     except Exception as e:  # noqa: BLE001
         print("Histórico falhou:", e, file=sys.stderr)
 
