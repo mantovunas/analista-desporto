@@ -1652,6 +1652,15 @@ def live_chart_url(home, away, hist, goals):
     return d.get("url") if r.status_code == 200 and d.get("success") else None
 
 
+def find_live(items, casas, foras):
+    """Procura o jogo na lista de jogos ao vivo da API (por nome das duas equipas; aceita vários nomes de cada)."""
+    for it in items or []:
+        h, a = it["teams"]["home"]["name"], it["teams"]["away"]["name"]
+        if any(match_team(n, [h], 0.72) for n in casas if n) and any(match_team(n, [a], 0.72) for n in foras if n):
+            return it
+    return None
+
+
 def pick_live_game(preds, text, now):
     t = norm(text)
     best = None
@@ -1675,7 +1684,6 @@ def live_mode(now):
     if not r:
         print("Jogo não encontrado no histórico (tem de ter sido analisado na mensagem das 9h).", file=sys.stderr)
         return
-    code = {v[0]: k for k, v in LEAGUES.items()}.get(r["liga"])
     kick = parse_iso(r["inicio_utc"])
     reqs = [0]
 
@@ -1683,13 +1691,6 @@ def live_mode(now):
         reqs[0] += 1
         return af_get(path, params)
 
-    fixtures = get("fixtures", {"league": AF_LEAGUES[code], "season": season_start(kick.date()), "date": kick.date().isoformat()})
-    hn = match_team(r["casa"], [f["teams"]["home"]["name"] for f in fixtures], 0.72)
-    fx = next((f for f in fixtures if f["teams"]["home"]["name"] == hn), None) if hn else None
-    if not fx:
-        print("Jogo não encontrado na API-Football.", file=sys.stderr)
-        return
-    fid, home_id = fx["fixture"]["id"], fx["teams"]["home"]["id"]
     pre = _trio(r, "fH", "fD", "fA") or _trio(r, "pH", "pD", "pA")
     lh0, la0 = fnum(r.get("xg_casa")) or 1.4, fnum(r.get("xg_fora")) or 1.1
     lh, la = calibrate_lambdas(lh0, la0, pre)
@@ -1699,20 +1700,32 @@ def live_mode(now):
     st0 = {"status": "NS", "minute": 0, "gh": 0, "ga": 0, "red_h": 0, "red_a": 0}
     mid = tg_send(live_text(r["casa"], r["fora"], r["inicio_utc"], st0, pre, pre, [], []))
     hist, seen, ev_lines, last_txt, st = [(0, *pre)], 0, [], "", st0
-    prev = pre
+    prev, fid, home_id, missing, seen_live = pre, None, None, 0, False
     while reqs[0] < LIVE_MAX_REQ:
         LIVE_SLEEP(LIVE_POLL_S)
         try:
-            items = get("fixtures", {"id": fid})
-            if not items:
+            # o plano grátis só deixa ver jogos AO VIVO (fixtures?live=all): um pedido traz todos os jogos
+            items = get("fixtures", {"live": "all"})
+            it = find_live(items, [r["casa"], r.get("fd_casa")], [r["fora"], r.get("fd_fora")])
+            if it is None:
+                if seen_live:
+                    missing += 1
+                    if missing >= 2:  # o jogo saiu da lista ao vivo = terminou
+                        st = dict(st, status="FT")
+                elif now_utc() > kick + dt.timedelta(minutes=25):
+                    print("Jogo não apareceu ao vivo na API.", file=sys.stderr)
+                    break
+            else:
+                seen_live, missing = True, 0
+                fid, home_id = it["fixture"]["id"], it["teams"]["home"]["id"]
+                st = parse_live(it, home_id)
+            if not seen_live:
                 continue
-            st = parse_live(items[0], home_id)
             probs = live_probs(lh, la, st["gh"], st["ga"], 45 if st["status"] == "HT" else st["minute"], st["red_h"], st["red_a"])
             swing = probs  # para os avisos de golo (não o 100% do apito final)
             if st["status"] in LIVE_DONE:
                 probs = (1.0, 0.0, 0.0) if st["gh"] > st["ga"] else ((0.0, 1.0, 0.0) if st["gh"] == st["ga"] else (0.0, 0.0, 1.0))
-            if st["status"] not in ("NS", "TBD"):
-                hist.append((st["minute"], *probs))
+            hist.append((st["minute"], *probs))
             for tm, is_home, player, d in st["goals"][seen:]:
                 who = r["casa"] if is_home else r["fora"]
                 pen = " (p.b.)" if "Own" in d else (" (g.p.)" if "Penalty" in d else "")
