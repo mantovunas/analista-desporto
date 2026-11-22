@@ -19,6 +19,7 @@ import math
 import time
 import html
 import difflib
+import subprocess
 import unicodedata
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -1196,6 +1197,43 @@ def gemini_summary(text):
     return ""
 
 
+def gemini_news(shown):
+    """EXPERIMENTAL: notícias/lesões dos jogos fora da Premier League, com pesquisa Google. Nunca altera probabilidades."""
+    if not GEMINI_KEY or os.getenv("NEWS_OFF"):
+        return ""
+    cands = []
+    for league, games in shown.items():
+        if league == "Premier League":
+            continue
+        for g in games:
+            cands.append((fame_score(league, g), g))
+    cands.sort(key=lambda x: -x[0])
+    top = cands[:3]
+    if not top:
+        return ""
+    jogos = "\n".join(f"- {g['home']} vs {g['away']}" for _, g in top)
+    prompt = ("Pesquisa notícias das últimas 48 horas sobre estes jogos de futebol de hoje: lesões, suspensões, "
+              "jogadores importantes em dúvida ou ausentes. Responde em português de Portugal, máx. 1 linha por jogo, "
+              "só com informação fiável que encontrares. Se não houver notícias fiáveis, escreve 'sem notícias fiáveis' "
+              "nessa linha. Não inventes.\n" + jogos)
+    r = None
+    try:
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+            params={"key": GEMINI_KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}, timeout=90)
+        r.raise_for_status()
+        txt = "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]).strip()
+        if not txt:
+            return ""
+        return "📰 <b>NOTÍCIAS (experimental, IA)</b>\n" + esc(txt[:900]) + "\n<i>Não influencia as probabilidades; confirma sempre.</i>"
+    except Exception as e:  # noqa: BLE001
+        print("Notícias Gemini falharam (ignorado):", e, file=sys.stderr)
+        if r is not None:
+            print("Resposta:", r.text[:300], file=sys.stderr)
+        return ""
+
+
 def telegram(blocks):
     chunks, cur = [], ""
     for b in blocks:
@@ -1495,6 +1533,10 @@ def results_night(now):
         blocks.append("\n".join(sm))
     if newly:
         blocks.append(history_blocks(picks_h, preds_h, newly)[0])
+    try:
+        blocks.extend(group_duel(done, now))
+    except Exception as e:  # noqa: BLE001
+        print("Bot contra o grupo falhou:", e, file=sys.stderr)
     blocks.append("— <b>Radar do Golo</b> 🎯")
     telegram(blocks)
 
@@ -1796,6 +1838,94 @@ def send_poll(shown, now):
                    "fecha_utc": close.strftime("%Y-%m-%dT%H:%M:%SZ"), "options": saved}, f)
 
 
+# ---------- Bot contra o grupo ----------
+GROUP_FILE = f"{HIST_DIR}/palpite_grupo.json"
+DUEL_GROUP_FILE = f"{HIST_DIR}/duelo_grupo.csv"
+DUEL_GROUP_FIELDS = ["data", "casa", "fora", "resultado", "bot", "grupo", "votos", "bot_ok", "grupo_ok"]
+GROUP_NAMES = ("casa", "empate", "fora")
+
+
+def send_group_poll(shown, now):
+    """Segunda sondagem das 9h: o grupo palpita no jogo mais famoso; o bot guarda o seu palpite em segredo."""
+    cands = []
+    for league, games in shown.items():
+        for g in games:
+            if g.get("final") and parse_iso(g["time"]) > now + dt.timedelta(minutes=POLL_MIN_AHEAD_MIN):
+                cands.append((fame_score(league, g), g))
+    if not cands:
+        return
+    cands.sort(key=lambda x: -x[0])
+    g = cands[0][1]
+    f = g["final"]
+    bot = f.index(max(f))
+    q = f"🆚 BOT CONTRA O GRUPO: {short_name(g['home'])} vs {short_name(g['away'])} — quem ganha? Vota antes do jogo (o bot já escolheu, em segredo)."
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPoll",
+                      json={"chat_id": TG_CHAT, "question": q[:300],
+                            "options": [f"🏠 {short_name(g['home'])}"[:100], "🤝 Empate", f"✈️ {short_name(g['away'])}"[:100]],
+                            "is_anonymous": True, "allows_multiple_answers": False}, timeout=30)
+    r.raise_for_status()
+    res = r.json()["result"]
+    with open(GROUP_FILE, "w", encoding="utf-8") as fh:
+        json.dump({"date": now.date().isoformat(), "poll_id": res["poll"]["id"], "message_id": res["message_id"],
+                   "casa": g["home"], "fora": g["away"], "inicio_utc": g["time"], "bot": bot,
+                   "probs": [round(x, 4) for x in f]}, fh)
+
+
+def group_duel(done, now):
+    """À noite: compara o palpite do grupo (opção mais votada) com o do bot. Devolve blocos de texto."""
+    if not os.path.exists(GROUP_FILE):
+        return []
+    with open(GROUP_FILE, encoding="utf-8") as fh:
+        d = json.load(fh)
+    if d.get("done") or d.get("date") != now.astimezone(LISBON).date().isoformat():
+        return []
+    row = next((r for r in done if r["casa"] == d["casa"] and r["fora"] == d["fora"]), None)
+    if not row:
+        return []
+    res = _result_idx(row)
+    d["done"] = True
+    with open(GROUP_FILE, "w", encoding="utf-8") as fh:
+        json.dump(d, fh)
+    votes = None
+    try:  # stopPoll devolve a contagem final, sem depender do getUpdates
+        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/stopPoll",
+                          json={"chat_id": TG_CHAT, "message_id": d["message_id"]}, timeout=30)
+        r.raise_for_status()
+        votes = [o["voter_count"] for o in r.json()["result"]["options"]]
+    except Exception as e:  # noqa: BLE001
+        print("stopPoll (grupo) falhou:", e, file=sys.stderr)
+        try:
+            votes = read_votes(d["poll_id"])
+        except Exception as e2:  # noqa: BLE001
+            print("read_votes (grupo) falhou:", e2, file=sys.stderr)
+    if not votes or sum(votes) < 2:
+        return ["🆚 <b>BOT CONTRA O GRUPO</b>\nPoucos votos hoje (menos de 2), não conta para o placar."]
+    top = max(votes)
+    grp = [i for i, v in enumerate(votes) if v == top]
+    bot = d["bot"]
+    lines = [f"🆚 <b>BOT CONTRA O GRUPO</b>",
+             f"{esc(d['casa'])} {row['golos_casa']}–{row['golos_fora']} {esc(d['fora'])}",
+             f"🤖 Bot: {GROUP_NAMES[bot]} {d['probs'][bot]:.0%} {'✅' if bot == res else '❌'}"]
+    if len(grp) == 1:
+        gi = grp[0]
+        lines.append(f"👥 Grupo: {GROUP_NAMES[gi]} ({votes[gi]}/{sum(votes)} votos) {'✅' if gi == res else '❌'}")
+        gtxt, gok = GROUP_NAMES[gi], int(gi == res)
+    else:
+        lines.append(f"👥 Grupo: empate nos votos ({votes}) — não conta")
+        gtxt, gok = "empate_votos", ""
+    rows = read_csv(DUEL_GROUP_FILE)
+    rows.append({"data": d["date"], "casa": d["casa"], "fora": d["fora"], "resultado": GROUP_NAMES[res], "bot": GROUP_NAMES[bot],
+                 "grupo": gtxt, "votos": "/".join(map(str, votes)), "bot_ok": int(bot == res), "grupo_ok": gok})
+    write_csv(DUEL_GROUP_FILE, DUEL_GROUP_FIELDS, rows)
+    sc = [r for r in rows if r["grupo_ok"] != ""]
+    if sc:
+        b = sum(int(r["bot_ok"]) for r in sc)
+        gp = sum(int(r["grupo_ok"]) for r in sc)
+        lead = "🤖 Bot na frente" if b > gp else "👥 Grupo na frente" if gp > b else "🤝 Empatados"
+        lines.append(f"📊 Placar ({len(sc)} {"jogo" if len(sc) == 1 else "jogos"}): Bot {b} · Grupo {gp} — {lead}")
+    return ["\n".join(lines)]
+
+
 def read_votes(poll_id):
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
                       json={"allowed_updates": ["poll"], "limit": 100}, timeout=30)
@@ -1855,6 +1985,42 @@ def pick_live_game(preds, text, now):
     return best
 
 
+AOVIVO_FILE = f"{HIST_DIR}/aovivo.json"
+
+
+def live_snapshot(r, st, probs, pre, hist, ev_lines, push=False):
+    """Guarda o estado do jogo ao vivo para o site; só faz commit nos momentos importantes (golo, intervalo, fim)."""
+    try:
+        data = {"atualizado": now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"), "casa": r["casa"], "fora": r["fora"],
+                "inicio_utc": r["inicio_utc"], "estado": st["status"], "minuto": st["minute"],
+                "golos_casa": st["gh"], "golos_fora": st["ga"], "vermelhos": [st["red_h"], st["red_a"]],
+                "pre": [round(x, 4) for x in pre], "agora": [round(x, 4) for x in probs],
+                "hist": [[h[0], round(h[1], 3), round(h[2], 3), round(h[3], 3)] for h in hist][-200:],
+                "eventos": [re.sub(r"<[^>]+>", "", html.unescape(e)) for e in ev_lines][-20:],
+                "terminado": st["status"] in LIVE_DONE}
+        os.makedirs(HIST_DIR, exist_ok=True)
+        with open(AOVIVO_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        if push and os.getenv("GITHUB_ACTIONS") == "true":
+            git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True, text=True, timeout=120)
+            git("config", "user.name", "github-actions")
+            git("config", "user.email", "github-actions@users.noreply.github.com")
+            git("add", AOVIVO_FILE)
+            if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+                return
+            git("commit", "-m", "Ao vivo")
+            for _ in range(3):
+                try:
+                    git("pull", "--rebase", "--autostash")
+                    git("push")
+                    break
+                except subprocess.CalledProcessError as e:
+                    print("push ao vivo falhou:", (e.stderr or "")[:200], file=sys.stderr)
+                    time.sleep(5)
+    except Exception as e:  # noqa: BLE001
+        print("Snapshot ao vivo falhou (ignorado):", e, file=sys.stderr)
+
+
 def live_mode(now):
     if not AF_KEY:
         print("Sem APIFOOTBALL_KEY.", file=sys.stderr)
@@ -1881,7 +2047,10 @@ def live_mode(now):
     st0 = {"status": "NS", "minute": 0, "gh": 0, "ga": 0, "red_h": 0, "red_a": 0}
     mid = tg_send(live_text(r["casa"], r["fora"], r["inicio_utc"], st0, pre, pre, [], []))
     hist, seen, ev_lines, last_txt, st = [(0, *pre)], 0, [], "", st0
+    live_snapshot(r, st0, pre, pre, hist, [], push=True)
+    last_key = ("NS", 0)
     prev, fid, home_id, missing, seen_live = pre, None, None, 0, False
+    swings = []  # (variação da prob. da casa, minuto, jogador, equipa, antes, depois)
     while reqs[0] < LIVE_MAX_REQ:
         LIVE_SLEEP(LIVE_POLL_S)
         try:
@@ -1911,6 +2080,7 @@ def live_mode(now):
                 who = r["casa"] if is_home else r["fora"]
                 pen = " (p.b.)" if "Own" in d else (" (g.p.)" if "Penalty" in d else "")
                 ev_lines.append(f"⚽ {tm}' {esc(player)} ({esc(short_name(who))}){pen}")
+                swings.append((abs(swing[0] - prev[0]) + abs(swing[2] - prev[2]), tm, player, who, prev, swing))
                 try:
                     tg_send(f"⚽ <b>GOLO! {esc(r['casa'])} {st['gh']}–{st['ga']} {esc(r['fora'])}</b> · {tm}'\n"
                             f"{esc(player)} ({esc(short_name(who))}){pen}\n"
@@ -1919,6 +2089,9 @@ def live_mode(now):
                     print("Aviso de golo falhou:", e, file=sys.stderr)
             seen = len(st["goals"])
             prev = swing
+            key = (st["status"] if st["status"] in ("HT", "2H", *LIVE_DONE) else "1H", st["gh"] + st["ga"])
+            live_snapshot(r, st, probs, pre, hist, ev_lines, push=key != last_key)
+            last_key = key
             txt = live_text(r["casa"], r["fora"], r["inicio_utc"], st, probs, pre, hist, ev_lines)
             if txt != last_txt:
                 tg_edit(mid, txt)
@@ -1933,6 +2106,12 @@ def live_mode(now):
             res = _result_idx({"golos_casa": st["gh"], "golos_fora": st["ga"]})
             cap = (f"📊 {esc(r['casa'])} {st['gh']}–{st['ga']} {esc(r['fora'])}\nAntes do jogo o bot dava "
                    f"{('casa', 'empate', 'fora')[res]} {pre[res]:.0%}.")
+            if swings:
+                big = max(swings, key=lambda x: x[0])
+                if big[0] >= 0.15:
+                    _, tm, pl, who, p0, p1 = big
+                    cap += (f"\n🔄 <b>Momento da viragem:</b> {tm}' golo de {esc(pl)} ({esc(short_name(who))}) — "
+                            f"{esc(short_name(r['casa']))} {p0[0]:.0%} → {p1[0]:.0%} · {esc(short_name(r['fora']))} {p0[2]:.0%} → {p1[2]:.0%}")
             requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
                           json={"chat_id": TG_CHAT, "photo": url, "caption": cap, "parse_mode": "HTML"}, timeout=60).raise_for_status()
     except Exception as e:  # noqa: BLE001
@@ -2101,6 +2280,12 @@ def main(now=None):
     if summary:
         blocks.insert(2, summary)  # logo a seguir ao resumo do topo
     try:
+        news = gemini_news(shown)
+        if news:
+            blocks.insert(3 if summary else 2, news)
+    except Exception as e:  # noqa: BLE001
+        print("Notícias falharam:", e, file=sys.stderr)
+    try:
         extra_leagues(teams_seen)
     except Exception as e:  # noqa: BLE001
         print("Ligas extra falharam:", e, file=sys.stderr)
@@ -2115,6 +2300,10 @@ def main(now=None):
         send_poll(shown, now)
     except Exception as e:  # noqa: BLE001
         print("Sondagem falhou:", e, file=sys.stderr)
+    try:
+        send_group_poll(shown, now)
+    except Exception as e:  # noqa: BLE001
+        print("Sondagem do grupo falhou:", e, file=sys.stderr)
     if sim_models:  # segunda mensagem, só às segundas-feiras
         try:
             sb = season_sim_blocks(sim_models, now.date())
