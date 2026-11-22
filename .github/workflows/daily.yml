@@ -52,5 +52,6 @@ jobs:
             echo "Sem alterações no histórico"
           else
             git commit -m "Atualizar histórico"
+            git pull --rebase --autostash
             git push
           fi
