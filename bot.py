@@ -175,6 +175,37 @@ def fd_matches(code, status="FINISHED"):
     return r.json().get("matches", [])
 
 
+# ---------- ligas só com resultados (sem odds nem previsões): aparecem no site ----------
+EXTRA_LEAGUES = {"BSA": "Brasileirão"}
+EXTRA_FILE = f"{HIST_DIR}/outras_ligas.csv"
+
+
+def extra_leagues(teams_seen):
+    """Resultados recentes e próximos jogos de ligas extra (football-data.org grátis). Só informativo."""
+    rows = []
+    for code, name in EXTRA_LEAGUES.items():
+        try:
+            fin = fd_matches(code, "FINISHED")
+            sch = fd_matches(code, "SCHEDULED,TIMED")
+        except Exception as e:  # noqa: BLE001
+            print("Liga extra falhou:", name, e, file=sys.stderr)
+            continue
+        teams = {m[side]["name"] for m in fin + sch for side in ("homeTeam", "awayTeam") if m.get(side, {}).get("name")}
+        if teams:
+            teams_seen[name] = sorted(teams)
+        for m in sorted(fin, key=lambda m: m["utcDate"], reverse=True)[:40]:
+            sc = (m.get("score", {}).get("fullTime") or {})
+            if m["homeTeam"].get("name") and m["awayTeam"].get("name") and sc.get("home") is not None:
+                rows.append({"liga": name, "data": m["utcDate"], "casa": m["homeTeam"]["name"], "fora": m["awayTeam"]["name"],
+                             "golos_casa": sc["home"], "golos_fora": sc["away"], "estado": "terminado"})
+        for m in sorted(sch, key=lambda m: m["utcDate"])[:20]:
+            if m["homeTeam"].get("name") and m["awayTeam"].get("name"):
+                rows.append({"liga": name, "data": m["utcDate"], "casa": m["homeTeam"]["name"], "fora": m["awayTeam"]["name"],
+                             "golos_casa": "", "golos_fora": "", "estado": "agendado"})
+    if rows:
+        write_csv(EXTRA_FILE, ["liga", "data", "casa", "fora", "golos_casa", "golos_fora", "estado"], rows)
+
+
 def score90(m):
     """Golos aos 90 minutos (regularTime se houve prolongamento, senão fullTime)."""
     s = m.get("score", {})
@@ -1991,6 +2022,7 @@ def main(now=None):
     near = now + dt.timedelta(hours=HOURS_AHEAD)
     far = now + dt.timedelta(hours=FALLBACK_HOURS)
     results, idx, sim_models = {}, {}, {}
+    teams_seen = {}
     want_sim = now.astimezone(LISBON).weekday() == 0  # corrida da época: às segundas-feiras
     for code, (name, sport) in LEAGUES.items():
         try:
@@ -2011,6 +2043,7 @@ def main(now=None):
             if not st:
                 print("Poucos dados:", name, file=sys.stderr)
                 continue
+            teams_seen[name] = sorted(st["att"].keys())
             if want_sim and code in SIM_LEAGUES:
                 sim_models[code] = (name, st, matches)
             games = []
@@ -2067,6 +2100,15 @@ def main(now=None):
     summary = gemini_summary(plain_text(blocks))
     if summary:
         blocks.insert(2, summary)  # logo a seguir ao resumo do topo
+    try:
+        extra_leagues(teams_seen)
+    except Exception as e:  # noqa: BLE001
+        print("Ligas extra falharam:", e, file=sys.stderr)
+    try:  # lista de equipas por liga, para o site (escolha da equipa favorita)
+        if teams_seen:
+            write_csv(f"{HIST_DIR}/equipas.csv", ["liga", "equipa"], [{"liga": l, "equipa": t} for l, ts in teams_seen.items() for t in ts])
+    except Exception as e:  # noqa: BLE001
+        print("equipas.csv falhou:", e, file=sys.stderr)
     telegram(blocks)
     mark_sent(now)
     try:
