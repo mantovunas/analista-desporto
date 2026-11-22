@@ -919,6 +919,35 @@ def duel_line(rows, label):
     return f"🥊 {label} (modelo e mercado discordavam muito, {n} jogos): Modelo {m} – Mercado {k}"
 
 
+def week_highlights(rp, lo):
+    """Destaques da semana: melhor acerto, maior surpresa, jogo mais louco e placar Bot vs Grupo."""
+    out = [""]
+    sc = [(r, _final_probs(r)) for r in rp]
+    sc = [(r, p) for r, p in sc if p]
+    names = ("casa", "empate", "fora")
+
+    def jg(r):
+        return f"{esc(short_name(r['casa']))} {r['golos_casa']}–{r['golos_fora']} {esc(short_name(r['fora']))}"
+    if sc:
+        ok = [(max(p), r, p) for r, p in sc if p.index(max(p)) == _result_idx(r)]
+        if ok:
+            m, r, _ = max(ok, key=lambda x: x[0])
+            out.append(f"🏅 <b>Melhor acerto:</b> {jg(r)} (o bot dava {names[_result_idx(r)]} {m:.0%})")
+        r, p = min(sc, key=lambda x: x[1][_result_idx(x[0])])
+        if p[_result_idx(r)] < 0.25:
+            out.append(f"😱 <b>Maior surpresa:</b> {jg(r)} (o bot dava só {p[_result_idx(r)]:.0%} a este resultado)")
+    wild = max(rp, key=lambda r: int(r["golos_casa"]) + int(r["golos_fora"]))
+    tot = int(wild["golos_casa"]) + int(wild["golos_fora"])
+    if tot >= 5:
+        out.append(f"🎢 <b>Jogo mais louco:</b> {jg(wild)} ({tot} golos)")
+    g = [r for r in read_csv(DUEL_GROUP_FILE) if r.get("grupo_ok") != "" and r.get("data", "") >= lo.date().isoformat()]
+    if g:
+        b = sum(int(r["bot_ok"]) for r in g)
+        gp = sum(int(r["grupo_ok"]) for r in g)
+        out.append(f"🆚 <b>Bot vs Grupo (semana):</b> Bot {b} · Grupo {gp} em {len(g)} jogo{'s' if len(g) != 1 else ''}")
+    return out if len(out) > 1 else []
+
+
 def weekly_block(picks, preds, now):
     """Resumo dos últimos 7 dias (enviado às segundas-feiras)."""
     lo = now - dt.timedelta(days=7)
@@ -949,6 +978,10 @@ def weekly_block(picks, preds, now):
     bl = bankroll_line(picks, now)
     if bl:
         lines.append(bl)
+    try:
+        lines.extend(week_highlights(rp, lo))
+    except Exception as e:  # noqa: BLE001
+        print("Destaques da semana falharam:", e, file=sys.stderr)
     lines.append("<i>Uma semana é pouco: só dá para tirar conclusões com várias semanas.</i>")
     return "\n".join(lines)
 
