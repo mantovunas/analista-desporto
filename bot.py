@@ -19,6 +19,7 @@ import math
 import time
 import html
 import difflib
+import hashlib
 import subprocess
 import unicodedata
 import datetime as dt
@@ -67,10 +68,29 @@ PRIOR_SEASONS = 2      # épocas anteriores a usar
 DATA_DIR = "dados"
 
 # previsão final = peso_modelo * modelo + (1 - peso_modelo) * mercado
+ADAPT_FILE = "historico/peso_modelo.json"
+ADAPT_MIN_GAMES, ADAPT_STEP, ADAPT_LO, ADAPT_HI, BASE_W = 100, 0.05, 0.10, 0.35, 0.20
+_BASE_CACHE = [None]
+
+
+def base_weight():
+    """Peso do modelo com 3+ casas: 20% por defeito; o ajuste semanal pode mexer-lhe (entre 10% e 35%)."""
+    if _BASE_CACHE[0] is None:
+        w = BASE_W
+        try:
+            with open(ADAPT_FILE, encoding="utf-8") as f:
+                w = min(ADAPT_HI, max(ADAPT_LO, float(json.load(f)["base"])))
+        except Exception:  # noqa: BLE001
+            pass
+        _BASE_CACHE[0] = w
+    return _BASE_CACHE[0]
+
+
 def model_weight(n_books):
-    if n_books >= 3: return 0.20
-    if n_books == 2: return 0.35
-    if n_books == 1: return 0.50
+    b = base_weight()
+    if n_books >= 3: return b
+    if n_books == 2: return b + 0.15
+    if n_books == 1: return b + 0.30
     return 1.00
 
 # "odds acima do consenso": vantagem = prob_final * odd - 1
@@ -919,6 +939,71 @@ def duel_line(rows, label):
     return f"🥊 {label} (modelo e mercado discordavam muito, {n} jogos): Modelo {m} – Mercado {k}"
 
 
+def adapt_weight(preds, now):
+    """Ajuste semanal (2.as feiras): procura o peso do modelo que teria dado o menor erro nos últimos jogos
+    e aproxima-se dele no máximo 5 pontos por semana, sempre entre 10% e 35%. Só com 100+ jogos."""
+    rows = []
+    for r in preds:
+        if r.get("estado") != "resolvida":
+            continue
+        a, b = _trio(r, "pH", "pD", "pA"), _trio(r, "mH", "mD", "mA")
+        if a and b:
+            rows.append((a, b, _result_idx(r)))
+    rows = rows[-300:]
+    if len(rows) < ADAPT_MIN_GAMES:
+        return f"⚖️ Peso do modelo: {base_weight():.0%} (o ajuste automático começa com {ADAPT_MIN_GAMES} jogos avaliados; há {len(rows)})."
+
+    def err(w):
+        tot = 0.0
+        for a, b, k in rows:
+            for i in range(3):
+                x = w * a[i] + (1 - w) * b[i]
+                tot += (x - (1.0 if i == k else 0.0)) ** 2
+        return tot / len(rows)
+    grid = [i / 100 for i in range(round(ADAPT_LO * 100), round(ADAPT_HI * 100) + 1, 5)]
+    best = min(grid, key=err)
+    cur = base_weight()
+    new = cur + max(-ADAPT_STEP, min(ADAPT_STEP, best - cur))
+    new = round(min(ADAPT_HI, max(ADAPT_LO, new)) * 100) / 100
+    try:
+        os.makedirs(HIST_DIR, exist_ok=True)
+        with open(ADAPT_FILE, "w", encoding="utf-8") as f:
+            json.dump({"base": new, "melhor": best, "jogos": len(rows), "data": now.date().isoformat()}, f)
+        _BASE_CACHE[0] = None
+    except Exception as e:  # noqa: BLE001
+        print("Peso adaptativo não gravado:", e, file=sys.stderr)
+        return ""
+    if new == cur:
+        return f"⚖️ Peso do modelo mantém-se em {cur:.0%} (melhor peso nos últimos {len(rows)} jogos: {best:.0%})."
+    return f"⚖️ Peso do modelo ajustado: {cur:.0%} → {new:.0%} (melhor peso nos últimos {len(rows)} jogos: {best:.0%})."
+
+
+def yesterday_line(preds, now):
+    """'Ontem o bot acertou 5/8' (jogos de ontem, hora de Lisboa, já resolvidos)."""
+    y = (now.astimezone(LISBON) - dt.timedelta(days=1)).date()
+    rows = [r for r in preds if r.get("estado") == "resolvida" and _final_probs(r)
+            and parse_iso(r["inicio_utc"]).astimezone(LISBON).date() == y]
+    if len(rows) < 2:
+        return ""
+    hit = sum(1 for r in rows if _final_probs(r).index(max(_final_probs(r))) == _result_idx(r))
+    return f"📈 Ontem o bot acertou {hit}/{len(rows)} ({hit / len(rows):.0%})"
+
+
+def streak_line(preds):
+    """Sequência atual de acertos do bot (resultado mais provável) e recorde. Só mostra a partir de 3 seguidos."""
+    rows = sorted((r for r in preds if r.get("estado") == "resolvida" and _final_probs(r)), key=lambda r: r["inicio_utc"])
+    cur = best = 0
+    for r in rows:
+        if _final_probs(r).index(max(_final_probs(r))) == _result_idx(r):
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    if cur < 3:
+        return ""
+    return f"🔥 Sequência: {cur} acertos seguidos" + (" (recorde!)" if cur == best else f" (recorde {best})")
+
+
 def week_highlights(rp, lo):
     """Destaques da semana: melhor acerto, maior surpresa, jogo mais louco e placar Bot vs Grupo."""
     out = [""]
@@ -978,6 +1063,12 @@ def weekly_block(picks, preds, now):
     bl = bankroll_line(picks, now)
     if bl:
         lines.append(bl)
+    try:
+        al = adapt_weight(preds, now)
+        if al:
+            lines.append(al)
+    except Exception as e:  # noqa: BLE001
+        print("Ajuste de peso falhou:", e, file=sys.stderr)
     try:
         lines.extend(week_highlights(rp, lo))
     except Exception as e:  # noqa: BLE001
@@ -1113,7 +1204,7 @@ def build_blocks(results, fallback, extra=None):
                 all_picks.append((pk["edge"], g, pk))
     all_picks.sort(key=lambda x: -x[0])
 
-    blocks = [f"⚽ <b>ANALISTA DESPORTO</b>\n📅 {DIAS[now.weekday()]}, {now:%d/%m/%Y}\n━━━━━━━━━━━━━━━"]
+    blocks = [f"⚽ <b>RADAR DO GOLO</b>\n📅 {DIAS[now.weekday()]}, {now:%d/%m/%Y}\n━━━━━━━━━━━━━━━"]
     # 1) resumo curto no topo
     n_leagues = sum(1 for gs in results.values() if gs)
     lines = ["📌 <b>RESUMO</b>"]
@@ -1134,6 +1225,21 @@ def build_blocks(results, fallback, extra=None):
         name, pr = fav_label(top)
         lines.append(f"🏆 <b>Jogo do dia:</b> {esc(top['home'])} vs {esc(top['away'])} · {fmt_time(top['time'])}")
         lines.append(f"   {esc(name)} {pr:.0%} · golos esperados {top['p']['lh']:.1f}–{top['p']['la']:.1f}")
+    risky = []
+    for g in club:
+        why = []
+        if g.get("market") and max(abs(a - b) for a, b in zip(g["model"], g["market"])) >= DUEL_GAP:
+            why.append("modelo e mercado discordam")
+        if g.get("spread_warn"):
+            why.append("casas divergem")
+        if g.get("inj_warn"):
+            why.append("muitas baixas")
+        if why:
+            risky.append(f"• {esc(g['home'])} vs {esc(g['away'])} — {', '.join(why)}")
+    if risky:
+        lines.append("")
+        lines.append("⚠️ <b>Jogos de risco (o bot está menos seguro):</b>")
+        lines.extend(risky[:4])
     lines.append("")
     lines.append(f"🔎 Odds acima do consenso: {len(all_picks)}" if all_picks else "🔎 Odds acima do consenso: nenhuma hoje 🧘")
     blocks.append("\n".join(lines))
@@ -1563,11 +1669,15 @@ def results_night(now):
         sm = [f"⚽ {len(done)} jogos terminados · resultado mais provável acertou {hits}/{len(done)}"]
         if favs:
             sm.append(f"⭐ Favoritos claros: {favs_ok}/{favs}")
+        sl = streak_line(preds_h)
+        if sl:
+            sm.append(sl)
         blocks.append("\n".join(sm))
     if newly:
         blocks.append(history_blocks(picks_h, preds_h, newly)[0])
     try:
         blocks.extend(group_duel(done, now))
+        blocks.extend(exact_duel(done, now))
     except Exception as e:  # noqa: BLE001
         print("Bot contra o grupo falhou:", e, file=sys.stderr)
     blocks.append("— <b>Radar do Golo</b> 🎯")
@@ -1876,6 +1986,42 @@ GROUP_FILE = f"{HIST_DIR}/palpite_grupo.json"
 DUEL_GROUP_FILE = f"{HIST_DIR}/duelo_grupo.csv"
 DUEL_GROUP_FIELDS = ["data", "casa", "fora", "resultado", "bot", "grupo", "votos", "bot_ok", "grupo_ok"]
 GROUP_NAMES = ("casa", "empate", "fora")
+TACA_FILE = f"{HIST_DIR}/taca.csv"
+TACA_FIELDS = ["data", "uid", "nome", "voto", "certo"]
+
+
+def read_voters(poll_id):
+    """Quem votou em quê (sondagem não anónima): último voto de cada pessoa, a partir dos updates poll_answer."""
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                      json={"offset": -100, "limit": 100, "allowed_updates": ["poll", "poll_answer"]}, timeout=30)
+    r.raise_for_status()
+    out = {}
+    for u in r.json().get("result", []):
+        a = u.get("poll_answer")
+        if a and a.get("poll_id") == poll_id and a.get("user"):
+            usr = a["user"]
+            if a.get("option_ids"):
+                out[usr["id"]] = (usr.get("first_name") or "?", a["option_ids"][0])
+            else:
+                out.pop(usr["id"], None)  # retirou o voto
+    return out
+
+
+def taca_lines(rows):
+    """Classificação acumulada: acertos/jogos por pessoa (nomes próprios; o bot entra como jogador)."""
+    tab = {}
+    for r in rows:
+        t = tab.setdefault(r["uid"], {"nome": r["nome"], "ok": 0, "n": 0})
+        t["nome"] = r["nome"]
+        t["n"] += 1
+        t["ok"] += int(r["certo"])
+    duel = [r for r in read_csv(DUEL_GROUP_FILE)]
+    if duel:
+        tab["bot"] = {"nome": "🤖 Bot", "ok": sum(int(r["bot_ok"]) for r in duel), "n": len(duel)}
+    rank = sorted(tab.values(), key=lambda t: (-t["ok"], -(t["ok"] / t["n"]), t["nome"]))
+    medals = ["🥇", "🥈", "🥉"]
+    return [f"{medals[i] if i < 3 else str(i + 1) + '.'} {esc(t['nome'])} — {t['ok']}/{t['n']} ({t['ok'] / t['n']:.0%})"
+            for i, t in enumerate(rank[:8])]
 
 
 def send_group_poll(shown, now):
@@ -1895,7 +2041,7 @@ def send_group_poll(shown, now):
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPoll",
                       json={"chat_id": TG_CHAT, "question": q[:300],
                             "options": [f"🏠 {short_name(g['home'])}"[:100], "🤝 Empate", f"✈️ {short_name(g['away'])}"[:100]],
-                            "is_anonymous": True, "allows_multiple_answers": False}, timeout=30)
+                            "is_anonymous": False, "allows_multiple_answers": False}, timeout=30)
     r.raise_for_status()
     res = r.json()["result"]
     with open(GROUP_FILE, "w", encoding="utf-8") as fh:
@@ -1950,12 +2096,98 @@ def group_duel(done, now):
     rows.append({"data": d["date"], "casa": d["casa"], "fora": d["fora"], "resultado": GROUP_NAMES[res], "bot": GROUP_NAMES[bot],
                  "grupo": gtxt, "votos": "/".join(map(str, votes)), "bot_ok": int(bot == res), "grupo_ok": gok})
     write_csv(DUEL_GROUP_FILE, DUEL_GROUP_FIELDS, rows)
+    try:  # Taça de previsores: pontos individuais (1 por palpite certo)
+        voters = read_voters(d["poll_id"])
+        trows = read_csv(TACA_FILE)
+        for uid, (nome, opt) in voters.items():
+            trows.append({"data": d["date"], "uid": hashlib.sha256(str(uid).encode()).hexdigest()[:10], "nome": nome,
+                          "voto": GROUP_NAMES[opt] if 0 <= opt < 3 else "?", "certo": int(opt == res)})
+        if voters:
+            write_csv(TACA_FILE, TACA_FIELDS, trows)
+            got = [f"{'✅' if o == res else '❌'} {esc(n)}" for n, o in voters.values()]
+            lines.append("🗳️ Palpites: " + " · ".join(got[:12]))
+            lines.append("🏆 <b>TAÇA DE PREVISORES</b>\n" + "\n".join(taca_lines(trows)))
+    except Exception as e:  # noqa: BLE001
+        print("Taça falhou:", e, file=sys.stderr)
     sc = [r for r in rows if r["grupo_ok"] != ""]
     if sc:
         b = sum(int(r["bot_ok"]) for r in sc)
         gp = sum(int(r["grupo_ok"]) for r in sc)
         lead = "🤖 Bot na frente" if b > gp else "👥 Grupo na frente" if gp > b else "🤝 Empatados"
         lines.append(f"📊 Placar ({len(sc)} {"jogo" if len(sc) == 1 else "jogos"}): Bot {b} · Grupo {gp} — {lead}")
+    return ["\n".join(lines)]
+
+
+# ---------- resultado exato (sextas-feiras) ----------
+EXATO_FILE = f"{HIST_DIR}/exato.json"
+EXATO_CSV = f"{HIST_DIR}/exato.csv"
+EXATO_FIELDS = ["data", "casa", "fora", "resultado", "bot", "grupo", "votos", "bot_ok", "grupo_ok"]
+
+
+def send_exact_poll(shown, now):
+    """Sextas-feiras: o grupo tenta adivinhar o resultado exato do jogo mais famoso das próximas 48 h."""
+    cands = []
+    for league, games in shown.items():
+        for g in games:
+            if g.get("p") and parse_iso(g["time"]) > now + dt.timedelta(minutes=POLL_MIN_AHEAD_MIN):
+                cands.append((fame_score(league, g), g))
+    if not cands:
+        return
+    g = max(cands, key=lambda x: x[0])[1]
+    sc = [f"{i}–{j}" for (i, j), _ in top_scores(g["p"]["lh"], g["p"]["la"], 4)]
+    opts = sc + ["Outro resultado"]
+    q = f"🎯 RESULTADO EXATO: {short_name(g['home'])} vs {short_name(g['away'])} ({fmt_time(g['time'])}). Qual será? O bot já escolheu."
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPoll",
+                      json={"chat_id": TG_CHAT, "question": q[:300], "options": opts,
+                            "is_anonymous": True, "allows_multiple_answers": False}, timeout=30)
+    r.raise_for_status()
+    res = r.json()["result"]
+    with open(EXATO_FILE, "w", encoding="utf-8") as f:
+        json.dump({"date": now.date().isoformat(), "poll_id": res["poll"]["id"], "message_id": res["message_id"],
+                   "casa": g["home"], "fora": g["away"], "inicio_utc": g["time"], "opcoes": opts, "bot": sc[0]}, f)
+
+
+def exact_duel(done, now):
+    """À noite: se o jogo da sondagem de resultado exato terminou, compara bot, grupo e realidade."""
+    if not os.path.exists(EXATO_FILE):
+        return []
+    with open(EXATO_FILE, encoding="utf-8") as f:
+        d = json.load(f)
+    if d.get("done"):
+        return []
+    row = next((r for r in done if r["casa"] == d["casa"] and r["fora"] == d["fora"]), None)
+    if not row:
+        return []
+    real = f"{row['golos_casa']}–{row['golos_fora']}"
+    d["done"] = True
+    with open(EXATO_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f)
+    votes = None
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/stopPoll",
+                          json={"chat_id": TG_CHAT, "message_id": d["message_id"]}, timeout=30)
+        r.raise_for_status()
+        votes = [o["voter_count"] for o in r.json()["result"]["options"]]
+    except Exception as e:  # noqa: BLE001
+        print("stopPoll (exato) falhou:", e, file=sys.stderr)
+    lines = ["🎯 <b>RESULTADO EXATO</b>", f"{esc(d['casa'])} {real} {esc(d['fora'])}",
+             f"🤖 Bot: {d['bot']} {'✅' if d['bot'] == real else '❌'}"]
+    gtxt, gok = "", ""
+    if votes and sum(votes) >= 2:
+        top = max(votes)
+        win = [i for i, v in enumerate(votes) if v == top]
+        if len(win) == 1:
+            gtxt = d["opcoes"][win[0]]
+            gok = int(gtxt == real)
+            lines.append(f"👥 Grupo: {gtxt} ({top}/{sum(votes)} votos) {'✅' if gok else '❌'}")
+        else:
+            lines.append("👥 Grupo: empate nos votos — não conta")
+    else:
+        lines.append("👥 Poucos votos — não conta")
+    rows = read_csv(EXATO_CSV)
+    rows.append({"data": d["date"], "casa": d["casa"], "fora": d["fora"], "resultado": real, "bot": d["bot"],
+                 "grupo": gtxt, "votos": "/".join(map(str, votes or [])), "bot_ok": int(d["bot"] == real), "grupo_ok": gok})
+    write_csv(EXATO_CSV, EXATO_FIELDS, rows)
     return ["\n".join(lines)]
 
 
@@ -2309,6 +2541,12 @@ def main(now=None):
         print("Histórico falhou:", e, file=sys.stderr)
 
     blocks = build_blocks(shown, fallback, extra)
+    try:  # uma linha com o desempenho de ontem, no resumo do topo
+        yl = yesterday_line(read_csv(PREDS_FILE), now)
+        if yl and len(blocks) > 1 and blocks[1].startswith("📌"):
+            blocks[1] += "\n" + yl
+    except Exception as e:  # noqa: BLE001
+        print("Linha de ontem falhou:", e, file=sys.stderr)
     summary = gemini_summary(plain_text(blocks))
     if summary:
         blocks.insert(2, summary)  # logo a seguir ao resumo do topo
@@ -2337,6 +2575,11 @@ def main(now=None):
         send_group_poll(shown, now)
     except Exception as e:  # noqa: BLE001
         print("Sondagem do grupo falhou:", e, file=sys.stderr)
+    if now.astimezone(LISBON).weekday() == 4:  # sexta-feira
+        try:
+            send_exact_poll(shown, now)
+        except Exception as e:  # noqa: BLE001
+            print("Sondagem de resultado exato falhou:", e, file=sys.stderr)
     if sim_models:  # segunda mensagem, só às segundas-feiras
         try:
             sb = season_sim_blocks(sim_models, now.date())
