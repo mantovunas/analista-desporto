@@ -6,6 +6,13 @@
 <title>Radar do Golo</title>
 <meta name="description" content="Radar do Golo: previsões de futebol, probabilidades ao vivo, desempenho e corrida da época.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d4aff'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='22' cy='10' r='2.4' fill='%23ffd23f'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#6d4aff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Radar do Golo">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
 :root{
   --bg:#f5f6f8; --card:#ffffff; --ink:#15191f; --muted:#5d6672; --line:#e3e6ea;
@@ -487,6 +494,15 @@ function extraCard(r){
   const k=new Date(r.data);
   return `<div class="card game"><div class="top"><span>🕗 ${fmtDay(k)} · ${fmtHour(k)}</span><span>${esc(r.liga)}</span></div><div class="teams">${esc(short(r.casa))} <span class="muted">vs</span> ${esc(short(r.fora))}</div><div class="muted">Só resultados: nesta liga o bot não faz previsões.</div></div>`;
 }
+function botVsTeam(team){
+  const R=(DATA.P||[]).filter(r=>r.estado==="resolvida"&&fin(r)&&(sameTeam(r.casa,team)||sameTeam(r.fora,team)));
+  if(R.length<3) return "";
+  const ok=R.filter(r=>argmax(fin(r))===resIdx(r)).length;
+  let surpr=0,fail=0;
+  for(const r of R){const home=sameTeam(r.casa,team),f=fin(r),mine=home?0:2,theirs=home?2:0,k=resIdx(r);
+    if(k===mine&&argmax(f)===theirs) surpr++; if(k!==argmax(f)) fail++}
+  return `<h2>O bot e a tua equipa</h2><div class="card"><div class="kpis"><div class="kpi"><div class="v">${ok}/${R.length}</div><div class="l">jogos em que o bot acertou</div></div><div class="kpi"><div class="v">${surpr}</div><div class="l">vezes que a tua equipa surpreendeu o bot</div></div></div><div class="muted">Contam só os jogos que o bot analisou.</div></div>`;
+}
 function teamPanel(team){
   let h="";
   const g=nextGameFor(team), X=extraFor(team);
@@ -504,6 +520,7 @@ function teamPanel(team){
     const form=L.map(r=>{const home=sameTeam(r.casa,team),i=resIdx(r);const w=(home&&i===0)||(!home&&i===2);return i===1?"🟨":(w?"🟩":"🟥")}).join(" ");
     h+=`<h2>Forma recente</h2><div class="card"><div style="font-size:22px;letter-spacing:2px">${form}</div><div class="muted">Mais recente à esquerda. Só jogos analisados pelo bot.</div>`+L.map(r=>`<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> ${r.golos_casa}–${r.golos_fora} <b>${esc(short(r.fora))}</b></div></div>`).join("")+`</div>`;
   }
+  h+=botVsTeam(team);
   const S=teamSim(team);
   if(S) h+=`<h2>Corrida da época</h2><div class="kpis"><div class="kpi"><div class="v">${pct(num(S.p_titulo)||0)}</div><div class="l">ser campeão</div></div><div class="kpi"><div class="v">${pct(num(S.p_champions)||0)}</div><div class="l">Champions</div></div><div class="kpi"><div class="v">${pct(num(S.p_descida)||0)}</div><div class="l">descer</div></div><div class="kpi"><div class="v">${num(S.pts_esperados)??"–"}</div><div class="l">pontos esperados</div></div></div>`;
   return h;
