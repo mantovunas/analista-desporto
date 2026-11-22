@@ -8,7 +8,7 @@ on:
         required: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: analista-aovivo      # grupo próprio: não bloqueia a mensagem das 9h nem os resultados da noite
