@@ -3,31 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Painel do Analista</title>
-<meta name="description" content="Previsões de futebol, desempenho e corrida da época do Analista Desporto.">
+<title>Radar do Golo</title>
+<meta name="description" content="Radar do Golo: previsões de futebol, probabilidades ao vivo, desempenho e corrida da época.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d4aff'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='22' cy='10' r='2.4' fill='%23ffd23f'/%3E%3C/svg%3E">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <style>
 :root{
   --bg:#f5f6f8; --card:#ffffff; --ink:#15191f; --muted:#5d6672; --line:#e3e6ea;
-  --home:#2e9e4f; --draw:#d9a300; --away:#2f6fd6; --good:#1f8a4c; --bad:#c9372c; --accent:#2f6fd6;
+  --home:#2e9e4f; --draw:#d9a300; --away:#2f6fd6; --good:#1f8a4c; --bad:#c9372c; --accent:#6d4aff; --accent2:#2b1d8f;
   --shadow:0 1px 2px rgba(0,0,0,.05);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --bg:#0f1318; --card:#181d24; --ink:#eef1f4; --muted:#9aa4b0; --line:#262d36;
-    --home:#3fbf68; --draw:#e8b923; --away:#5b95f0; --good:#43c279; --bad:#ef6a5e; --accent:#5b95f0;
+    --home:#3fbf68; --draw:#e8b923; --away:#5b95f0; --good:#43c279; --bad:#ef6a5e; --accent:#8f78ff; --accent2:#2b1d8f;
     --shadow:none;
   }
 }
 :root[data-theme="dark"]{
   --bg:#0f1318; --card:#181d24; --ink:#eef1f4; --muted:#9aa4b0; --line:#262d36;
-  --home:#3fbf68; --draw:#e8b923; --away:#5b95f0; --good:#43c279; --bad:#ef6a5e; --accent:#5b95f0; --shadow:none;
+  --home:#3fbf68; --draw:#e8b923; --away:#5b95f0; --good:#43c279; --bad:#ef6a5e; --accent:#8f78ff; --accent2:#2b1d8f; --shadow:none;
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   padding:0 16px calc(32px + env(safe-area-inset-bottom));}
 .wrap{max-width:760px;margin:0 auto}
-header{padding:20px 0 8px}
+header{padding:18px 0 8px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand>div:nth-child(2){flex:1;min-width:0}
+.auth{border:1px solid var(--accent);background:transparent;color:var(--accent);font:inherit;font-size:14px;font-weight:600;padding:7px 14px;border-radius:999px;cursor:pointer}
+.auth.on{background:var(--accent);color:#fff}
 h1{font-size:22px;margin:0;letter-spacing:-.01em}
 .sub{color:var(--muted);font-size:13px;margin-top:2px}
 nav{position:sticky;top:0;background:var(--bg);z-index:5;padding:10px 0;margin:0 -16px;padding-left:16px;padding-right:16px;
@@ -69,6 +75,31 @@ th,td{padding:7px 4px;text-align:right;border-bottom:1px solid var(--line);font-
 th:first-child,td:first-child{text-align:left}
 th{font-size:12px;color:var(--muted);font-weight:500}
 .empty{color:var(--muted);text-align:center;padding:26px 8px}
+nav button[aria-selected="true"]{background:var(--accent);border-color:var(--accent)}
+.hero{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#fff;border-radius:18px;padding:18px 16px;margin-bottom:14px}
+.hero .k{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85}
+.hero .t{font-size:21px;font-weight:700;margin:6px 0 10px;line-height:1.2}
+.hero .bar{background:rgba(255,255,255,.25)}
+.hero .probs{font-size:14px}
+.hero .meta{font-size:13px;opacity:.9;margin-top:8px}
+.ctas{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.btn{border:0;background:var(--accent);color:#fff;font:inherit;font-weight:600;padding:10px 16px;border-radius:12px;cursor:pointer}
+.btn.sec{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.btn:disabled{opacity:.6;cursor:default}
+dialog{border:1px solid var(--line);border-radius:18px;background:var(--card);color:var(--ink);padding:18px;width:min(92vw,400px)}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog h3{margin:0 0 4px}
+.tabs2{display:flex;gap:6px;margin:10px 0}
+.tabs2 button{flex:1;border:1px solid var(--line);background:transparent;color:var(--ink);font:inherit;padding:8px;border-radius:10px;cursor:pointer}
+.tabs2 button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input{width:100%;font:inherit;font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.msg{font-size:13px;margin-top:10px;min-height:18px}
+.msg.err{color:var(--bad)}.msg.ok{color:var(--good)}
+.person{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.person:last-child{border-bottom:0}
+.avatar{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex:0 0 auto}
 footer{margin-top:26px;color:var(--muted);font-size:12.5px}
 footer a{color:var(--accent)}
 .warn{font-size:12.5px;color:var(--muted);border-left:3px solid var(--draw);padding-left:10px;margin:10px 0}
@@ -77,26 +108,34 @@ footer a{color:var(--accent)}
 <body>
 <div class="wrap">
 <header>
-  <h1>📊 Painel do Analista</h1>
-  <div class="sub" id="upd">a carregar…</div>
+  <div class="brand">
+    <div class="logo" aria-hidden="true"><svg viewBox="0 0 32 32" width="34" height="34"><rect width="32" height="32" rx="9" fill="var(--accent)"/><circle cx="16" cy="16" r="9" fill="none" stroke="#fff" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="none" stroke="#fff" stroke-width="2"/><circle cx="22.5" cy="9.5" r="2.6" fill="#ffd23f"/></svg></div>
+    <div><h1>Radar do Golo</h1><div class="sub" id="upd">a carregar…</div></div>
+    <button id="authBtn" class="auth">Entrar</button>
+  </div>
 </header>
 <nav role="tablist" aria-label="Secções">
   <button role="tab" aria-selected="true" data-t="hoje">Hoje</button>
+  <button role="tab" aria-selected="false" data-t="equipa">A minha equipa</button>
   <button role="tab" aria-selected="false" data-t="desempenho">Desempenho</button>
   <button role="tab" aria-selected="false" data-t="banca">Banca</button>
   <button role="tab" aria-selected="false" data-t="epoca">Época</button>
   <button role="tab" aria-selected="false" data-t="jogos">Jogos</button>
+  <button role="tab" aria-selected="false" data-t="grupo">Grupo</button>
 </nav>
 
 <section id="hoje" class="on"></section>
+<section id="equipa"></section>
 <section id="desempenho"></section>
 <section id="banca"></section>
 <section id="epoca"></section>
 <section id="jogos"></section>
+<section id="grupo"></section>
+<dialog id="dlg"></dialog>
 
 <footer>
   Estimativas estatísticas, não garantem resultados. Aposta com responsabilidade.<br>
-  Previsões gravadas <b>antes</b> dos jogos e públicas:
+  Radar do Golo · previsões gravadas <b>antes</b> dos jogos e públicas:
   <a id="repo" href="https://github.com/mantovunas/analista-desporto/commits/main/historico">ver o histórico de alterações</a>.
 </footer>
 </div>
@@ -203,12 +242,29 @@ function gameCard(r){
       ${num(r.spread)>=0.07?`<span class="chip">⚠️ casas discordam</span>`:""}
     </div></div>`;
 }
+const FAMOUS=["benfica","porto","sporting","braga","real madrid","barcelona","atletico","athletic","manchester city","manchester united","liverpool","arsenal","chelsea","tottenham","newcastle","bayern","dortmund","leverkusen","paris","juventus","inter","milan","napoli","roma","ajax","psv"];
+const LFAME={"Champions League":6,"Premier League":3,"La Liga":3,"Liga Portugal":3,"Serie A":2,"Bundesliga":2,"Ligue 1":2};
+const nrm=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\b(fc|cf|sc|cd|afc|sad|club|clube|de|ac|rc|rcd|ca|sl|cp|and|1)\b/g," ").replace(/\s+/g," ").trim();
+const sameTeam=(a,b)=>{a=nrm(a);b=nrm(b);return a.length>2&&b.length>2&&(a===b||a.includes(b)||b.includes(a))};
+function heroCard(r){
+  const f=fin(r),k=new Date(r.inicio_utc);
+  return `<div class="hero"><div class="k">🏆 Jogo do dia · ${esc(r.liga)}</div>
+    <div class="t">${esc(short(r.casa))} vs ${esc(short(r.fora))}</div>
+    <div class="bar"><i class="h" style="width:${f[0]*100}%"></i><i class="d" style="width:${f[1]*100}%"></i><i class="a" style="width:${f[2]*100}%"></i></div>
+    <div class="probs"><span>🏠 ${pct(f[0])}</span><span>🤝 ${pct(f[1])}</span><span>✈️ ${pct(f[2])}</span></div>
+    <div class="meta">🕗 ${fmtDay(k)} às ${fmtHour(k)}${num(r.xg_casa)?` · ⚽ golos esperados ${num(r.xg_casa).toFixed(1)}–${num(r.xg_fora).toFixed(1)}`:""}</div></div>`;
+}
 function renderHoje(P){
   const now=new Date();
   const up=P.filter(r=>r.estado==="pendente"&&new Date(r.inicio_utc)>=new Date(now-3*3600e3)).sort((a,b)=>a.inicio_utc.localeCompare(b.inicio_utc));
   const days={};
   up.forEach(r=>{(days[dayKey(new Date(r.inicio_utc))]??=[]).push(r)});
   let h="";
+  const cand=up.filter(r=>fin(r)&&new Date(r.inicio_utc)>new Date(now.getTime()+30*60e3));
+  if(cand.length){
+    const sc=r=>10*((FAMOUS.some(f=>nrm(r.casa).includes(f))?1:0)+(FAMOUS.some(f=>nrm(r.fora).includes(f))?1:0))+(LFAME[r.liga]||0)+2*(1-Math.max(...fin(r)));
+    h+=heroCard(cand.reduce((a,b)=>sc(b)>sc(a)?b:a));
+  }
   const keys=Object.keys(days).slice(0,3);
   const today=dayKey(now);
   for(const k of keys){
@@ -305,6 +361,132 @@ function renderJogos(P){
   return h;
 }
 
+/* ---------- contas (Supabase) ---------- */
+const SB_URL="https://ivxgcrodjlmabvqiqmgf.supabase.co";
+const SB_KEY="sb_publishable_oMevjL98m04XjKbV6EJ6ow_5fNj88Vr";
+let sb=null;
+try{ if(window.supabase) sb=window.supabase.createClient(SB_URL,SB_KEY); }catch(e){ sb=null }
+let ME=null, PROFILE=null, GROUP=[];
+const initials=n=>(n||"?").trim().split(/\s+/).map(w=>w[0]).slice(0,2).join("").toUpperCase();
+const errPt=m=>/Invalid login/i.test(m)?"Email ou palavra-passe errados.":/already registered/i.test(m)?"Este email já tem conta. Usa “Entrar”.":/Password should be/i.test(m)?"A palavra-passe precisa de pelo menos 6 caracteres.":/Email not confirmed/i.test(m)?"Confirma primeiro o email (vê a caixa de entrada).":/signups? not allowed|Signups not allowed/i.test(m)?"Os registos estão fechados: o grupo já está completo.":/rate limit/i.test(m)?"Muitas tentativas. Espera um pouco.":("Algo falhou: "+m);
+function teamOptions(){
+  const set=new Set();
+  (DATA.P||[]).forEach(r=>{set.add(r.casa);set.add(r.fora)});(DATA.S||[]).forEach(r=>set.add(r.equipa));
+  return [...set].filter(Boolean).sort().map(t=>`<option value="${esc(t)}">`).join("");
+}
+async function loadProfile(){
+  PROFILE=null;GROUP=[];
+  if(!sb||!ME) return;
+  try{
+    let {data}=await sb.from("perfis").select("*").eq("id",ME.id).maybeSingle();
+    if(!data&&ME.user_metadata?.nome){
+      const ins=await sb.from("perfis").insert({id:ME.id,nome:ME.user_metadata.nome,equipa:ME.user_metadata.equipa||null}).select().maybeSingle();
+      data=ins.data;
+    }
+    PROFILE=data||null;
+    const g=await sb.from("perfis").select("nome,equipa,criado_em").order("criado_em");
+    GROUP=g.data||[];
+  }catch(e){console.warn(e)}
+}
+function updateAuthBtn(){
+  const b=document.getElementById("authBtn");
+  if(!sb){b.style.display="none";return}
+  b.classList.toggle("on",!!ME);
+  b.textContent=ME?(PROFILE?.nome||"Conta"):"Entrar";
+}
+function openAuth(mode="login"){
+  const d=document.getElementById("dlg");
+  const reg=mode==="reg";
+  d.innerHTML=`<form method="dialog" id="af">
+    <h3>${reg?"Criar conta":"Entrar"} no Radar do Golo</h3>
+    <div class="tabs2"><button type="button" data-m="login" class="${reg?"":"on"}">Entrar</button><button type="button" data-m="reg" class="${reg?"on":""}">Criar conta</button></div>
+    ${reg?`<label for="fn">O teu nome</label><input id="fn" autocomplete="nickname" maxlength="30" required>
+    <label for="ft">Equipa favorita</label><input id="ft" list="teams" placeholder="começa a escrever…"><datalist id="teams">${teamOptions()}</datalist>`:""}
+    <label for="fe">Email</label><input id="fe" type="email" autocomplete="email" required>
+    <label for="fp">Palavra-passe</label><input id="fp" type="password" autocomplete="${reg?"new-password":"current-password"}" minlength="6" required>
+    <div class="msg" id="fm" role="status"></div>
+    <div class="ctas"><button class="btn" id="fs" type="submit">${reg?"Criar conta":"Entrar"}</button><button class="btn sec" type="button" id="fc">Fechar</button></div>
+  </form>`;
+  d.querySelectorAll(".tabs2 button").forEach(b=>b.onclick=()=>openAuth(b.dataset.m));
+  d.querySelector("#fc").onclick=()=>d.close();
+  d.querySelector("#af").onsubmit=async ev=>{
+    ev.preventDefault();
+    const m=d.querySelector("#fm"),btn=d.querySelector("#fs");btn.disabled=true;m.className="msg";m.textContent="A processar…";
+    const email=d.querySelector("#fe").value.trim(),password=d.querySelector("#fp").value;
+    try{
+      let res;
+      if(reg) res=await sb.auth.signUp({email,password,options:{data:{nome:d.querySelector("#fn").value.trim(),equipa:d.querySelector("#ft").value.trim()||null}}});
+      else res=await sb.auth.signInWithPassword({email,password});
+      if(res.error) throw res.error;
+      if(reg&&!res.data.session){m.className="msg ok";m.textContent="Conta criada! Confirma o email que enviámos e depois entra.";btn.disabled=false;return}
+      d.close();
+    }catch(e){m.className="msg err";m.textContent=errPt(e.message||String(e));btn.disabled=false}
+  };
+  if(!d.open) d.showModal();
+}
+document.getElementById("authBtn").onclick=()=>{ME?(document.querySelector('nav button[data-t="equipa"]').click()):openAuth("login")};
+
+function nextGameFor(team){
+  const now=Date.now();
+  return (DATA.P||[]).filter(r=>r.estado==="pendente"&&new Date(r.inicio_utc)>=now-3*3600e3&&(sameTeam(r.casa,team)||sameTeam(r.fora,team))).sort((a,b)=>a.inicio_utc.localeCompare(b.inicio_utc))[0];
+}
+function lastGames(team,n=5){
+  return (DATA.P||[]).filter(r=>r.estado==="resolvida"&&(sameTeam(r.casa,team)||sameTeam(r.fora,team))).sort((a,b)=>b.inicio_utc.localeCompare(a.inicio_utc)).slice(0,n);
+}
+function teamSim(team){
+  const rows=(DATA.S||[]).filter(r=>sameTeam(r.equipa,team));
+  if(!rows.length) return null;
+  const last=rows.map(r=>r.data).sort().pop();
+  return rows.find(r=>r.data===last);
+}
+function teamPanel(team){
+  let h="";
+  const g=nextGameFor(team);
+  h+=`<h2>Próximo jogo</h2>`+(g?gameCard(g):empty("Ainda não há jogo analisado para esta equipa. O bot só analisa os jogos das ligas que cobre."));
+  const L=lastGames(team);
+  if(L.length){
+    const form=L.map(r=>{const home=sameTeam(r.casa,team),i=resIdx(r);const w=(home&&i===0)||(!home&&i===2);return i===1?"🟨":(w?"🟩":"🟥")}).join(" ");
+    h+=`<h2>Forma recente</h2><div class="card"><div style="font-size:22px;letter-spacing:2px">${form}</div><div class="muted">Mais recente à esquerda. Só jogos analisados pelo bot.</div>`+L.map(r=>`<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> ${r.golos_casa}–${r.golos_fora} <b>${esc(short(r.fora))}</b></div></div>`).join("")+`</div>`;
+  }
+  const S=teamSim(team);
+  if(S) h+=`<h2>Corrida da época</h2><div class="kpis"><div class="kpi"><div class="v">${pct(num(S.p_titulo)||0)}</div><div class="l">ser campeão</div></div><div class="kpi"><div class="v">${pct(num(S.p_champions)||0)}</div><div class="l">Champions</div></div><div class="kpi"><div class="v">${pct(num(S.p_descida)||0)}</div><div class="l">descer</div></div><div class="kpi"><div class="v">${num(S.pts_esperados)??"–"}</div><div class="l">pontos esperados</div></div></div>`;
+  return h;
+}
+function renderEquipa(){
+  if(!sb) return empty("As contas não estão disponíveis neste momento.");
+  if(!ME) return `<div class="card"><b>Cria a tua conta</b><p class="muted">Escolhe a tua equipa favorita e vê aqui o próximo jogo, a forma e as hipóteses na época.</p><div class="ctas"><button class="btn" id="goReg">Criar conta</button><button class="btn sec" id="goLog">Já tenho conta</button></div></div>`;
+  const nome=PROFILE?.nome||ME.user_metadata?.nome||"";
+  const team=PROFILE?.equipa||"";
+  let h=`<div class="card"><div class="person" style="border:0;padding:0"><div style="display:flex;gap:12px;align-items:center"><div class="avatar">${esc(initials(nome))}</div><div><b>${esc(nome||"Sem nome")}</b><div class="muted">${team?"A seguir: "+esc(team):"Ainda sem equipa"}</div></div></div><button class="btn sec" id="signOut">Sair</button></div></div>`;
+  h+=`<form class="card" id="pf"><b>O meu perfil</b><label for="pn">Nome</label><input id="pn" maxlength="30" required value="${esc(nome)}"><label for="pt">Equipa favorita</label><input id="pt" list="teams2" value="${esc(team)}" placeholder="começa a escrever…"><datalist id="teams2">${teamOptions()}</datalist><div class="msg" id="pm" role="status"></div><div class="ctas"><button class="btn" type="submit">Guardar</button></div></form>`;
+  if(team) h+=teamPanel(team);
+  return h;
+}
+function renderGrupo(){
+  if(!sb) return empty("As contas não estão disponíveis neste momento.");
+  if(!ME) return `<div class="card"><b>Só para membros</b><p class="muted">Entra para ver quem está no grupo e as equipas de cada um.</p><div class="ctas"><button class="btn" id="goLog2">Entrar</button></div></div>`;
+  if(!GROUP.length) return empty("Ainda não há membros.");
+  return `<div class="card">`+GROUP.map(p=>{
+    const g=p.equipa?nextGameFor(p.equipa):null;
+    return `<div class="person"><div style="display:flex;gap:12px;align-items:center;min-width:0"><div class="avatar">${esc(initials(p.nome))}</div><div style="min-width:0"><b>${esc(p.nome)}</b><div class="muted">${p.equipa?esc(p.equipa):"sem equipa"}</div></div></div><div class="muted" style="text-align:right">${g?`🕗 ${fmtDay(new Date(g.inicio_utc))}<br>${esc(short(g.casa))} vs ${esc(short(g.fora))}`:""}</div></div>`}).join("")+`</div>`;
+}
+function bindAuthButtons(){
+  const q=id=>document.getElementById(id);
+  if(q("goReg")) q("goReg").onclick=()=>openAuth("reg");
+  if(q("goLog")) q("goLog").onclick=()=>openAuth("login");
+  if(q("goLog2")) q("goLog2").onclick=()=>openAuth("login");
+  if(q("signOut")) q("signOut").onclick=async()=>{await sb.auth.signOut()};
+  const pf=q("pf");
+  if(pf) pf.onsubmit=async ev=>{
+    ev.preventDefault();const m=q("pm");m.className="msg";m.textContent="A guardar…";
+    const row={id:ME.id,nome:q("pn").value.trim(),equipa:q("pt").value.trim()||null};
+    const r=await sb.from("perfis").upsert(row);
+    if(r.error){m.className="msg err";m.textContent=errPt(r.error.message)}
+    else{await loadProfile();m.className="msg ok";m.textContent="Guardado!";draw()}
+  };
+}
+async function refreshAuth(){await loadProfile();updateAuthBtn();draw()}
+
 /* ---------- arranque ---------- */
 let DATA={};
 function draw(){
@@ -313,6 +495,9 @@ function draw(){
   document.getElementById("banca").innerHTML=renderBanca(DATA.K);
   document.getElementById("epoca").innerHTML=renderEpoca(DATA.S);
   document.getElementById("jogos").innerHTML=renderJogos(DATA.P);
+  document.getElementById("equipa").innerHTML=renderEquipa();
+  document.getElementById("grupo").innerHTML=renderGrupo();
+  bindAuthButtons();
   const a=document.getElementById("selL"),b=document.getElementById("selM"),c=document.getElementById("selJ");
   if(a) a.onchange=()=>{renderEpoca.st.liga=a.value;draw()};
   if(b) b.onchange=()=>{renderEpoca.st.met=b.value;draw()};
@@ -327,6 +512,10 @@ document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
 (async()=>{
   const [P,K,S]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv")]);
   DATA={P,K,S};draw();
+  if(sb){
+    const {data}=await sb.auth.getSession();ME=data.session?.user||null;await refreshAuth();
+    sb.auth.onAuthStateChange(async(ev,session)=>{ME=session?.user||null;await refreshAuth()});
+  }
   const last=P.map(r=>r.enviado_em).filter(Boolean).sort().pop();
   document.getElementById("upd").textContent=last?"Última análise: "+new Date(last).toLocaleString("pt-PT",{dateStyle:"long",timeStyle:"short",timeZone:TZ}):"Ainda sem dados";
   const h=location.hash.slice(1);const b=document.querySelector(`nav button[data-t="${h}"]`);if(b)b.click();
