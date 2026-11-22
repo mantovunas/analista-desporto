@@ -118,6 +118,7 @@ footer a{color:var(--accent)}
 </header>
 <nav role="tablist" aria-label="Secções">
   <button role="tab" aria-selected="true" data-t="hoje">Hoje</button>
+  <button role="tab" aria-selected="false" data-t="aovivo">Ao vivo</button>
   <button role="tab" aria-selected="false" data-t="equipa">A minha equipa</button>
   <button role="tab" aria-selected="false" data-t="desempenho">Desempenho</button>
   <button role="tab" aria-selected="false" data-t="banca">Banca</button>
@@ -127,6 +128,7 @@ footer a{color:var(--accent)}
 </nav>
 
 <section id="hoje" class="on"></section>
+<section id="aovivo"></section>
 <section id="equipa"></section>
 <section id="desempenho"></section>
 <section id="banca"></section>
@@ -282,9 +284,56 @@ function renderHoje(P){
   }
   return h;
 }
+function groupDuel(G){
+  const sc=(G||[]).filter(r=>r.grupo_ok!=="");
+  if(!sc.length) return "";
+  const b=sc.reduce((a,r)=>a+(+r.bot_ok||0),0),g=sc.reduce((a,r)=>a+(+r.grupo_ok||0),0);
+  const lead=b>g?"🤖 O bot está na frente":g>b?"👥 O grupo está na frente":"🤝 Empatados";
+  return `<h2>🆚 Bot contra o grupo</h2><div class="card"><div class="kpis"><div class="kpi"><div class="v">${b}</div><div class="l">🤖 Bot</div></div><div class="kpi"><div class="v">${g}</div><div class="l">👥 Grupo</div></div></div><div class="muted">${lead} em ${sc.length} jogo${sc.length>1?"s":""}. Todos os dias o grupo vota no jogo em destaque e o bot palpita em segredo.</div>`+
+   [...sc].reverse().slice(0,8).map(r=>`<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> vs <b>${esc(short(r.fora))}</b><div class="muted">saiu: ${esc(r.resultado)} · bot: ${esc(r.bot)} · grupo: ${esc(r.grupo)} (${esc(r.votos)})</div></div><div class="s">${+r.bot_ok?"🤖✅":"🤖❌"} ${+r.grupo_ok?"👥✅":"👥❌"}</div></div>`).join("")+`</div>`;
+}
+function goalsStats(R){
+  const pois=(k,l)=>Math.exp(-l)*Math.pow(l,k)/[1,1,2,6,24,120,720][k];
+  let o=0,on=0,b=0,bn=0,x=0,xn=0;
+  for(const r of R){
+    const g=+r.golos_casa+ +r.golos_fora,po=num(r.pO25),pb=num(r.pBTTS);
+    if(po!==null){on++;if((po>=0.5)===(g>=3))o++}
+    if(pb!==null){bn++;if((pb>=0.5)===(+r.golos_casa>0&&+r.golos_fora>0))b++}
+    const lh=num(r.xg_casa),la=num(r.xg_fora);
+    if(lh&&la){let best=[0,0],bp=-1;for(let i=0;i<=6;i++)for(let j=0;j<=6;j++){const p=pois(i,lh)*pois(j,la);if(p>bp){bp=p;best=[i,j]}}
+      xn++;if(best[0]===+r.golos_casa&&best[1]===+r.golos_fora)x++}
+  }
+  if(on<10&&bn<10&&xn<10) return "";
+  const row=(l,a,n)=>n>=10?`<tr><td>${l}</td><td>${pct(a/n)} (${a}/${n})</td></tr>`:"";
+  return `<h2>⚽ Golos</h2><div class="card"><table><tr><th></th><th>Acerto</th></tr>${row("Mais/menos de 2,5 golos",o,on)}${row("Ambas marcam (sim/não)",b,bn)}${row("Resultado exato (o mais provável)",x,xn)}</table><div class="muted">O resultado exato é muito difícil: acertar em 1 de cada 8 já é bom.</div></div>`;
+}
+async function loadLive(){
+  try{const r=await fetch(base+"aovivo.json?t="+Math.floor(Date.now()/30000));if(!r.ok)return null;return await r.json()}catch(e){return null}
+}
+function renderAoVivo(L){
+  if(!L) return `<div class="card"><b>🔴 Ao vivo</b><p class="muted">Todos os dias o grupo vota no jogo a seguir ao vivo. Quando começar, aparece aqui o resultado e as probabilidades a mudar. Ainda não houve nenhum jogo ao vivo.</p></div>`;
+  const nome={NS:"Vai começar",["1H"]:"1.ª parte",HT:"Intervalo",["2H"]:"2.ª parte",ET:"Prolongamento",P:"Penáltis",FT:"Terminado",AET:"Terminado",PEN:"Terminado"}[L.estado]||L.estado;
+  const age=Math.round((Date.now()-new Date(L.atualizado))/60000);
+  const live=!L.terminado&&age<20;
+  const [h,d,a]=L.agora,[h0,d0,a0]=L.pre;
+  const hist=L.hist||[];
+  let x=`<div class="card"><div class="muted">${live?`<b style="color:var(--bad)">🔴 AO VIVO</b> · ${L.estado==="NS"?"vai começar":esc(nome)+(L.minuto?" · "+L.minuto+"'":"")}`:L.terminado?"✅ Último jogo seguido ao vivo (terminado)":"⏸️ Último jogo seguido ao vivo"}</div>
+   <div style="text-align:center;margin:10px 0"><div style="font-size:17px"><b>${esc(short(L.casa))}</b> vs <b>${esc(short(L.fora))}</b></div><div style="font-size:42px;font-weight:700;letter-spacing:.02em">${L.golos_casa} – ${L.golos_fora}</div></div>
+   <div class="kpis"><div class="kpi"><div class="v" style="color:var(--home)">${pct(h)}</div><div class="l">${esc(short(L.casa))} <span class="muted">(antes ${pct(h0)})</span></div></div>
+   <div class="kpi"><div class="v" style="color:var(--draw)">${pct(d)}</div><div class="l">Empate <span class="muted">(antes ${pct(d0)})</span></div></div>
+   <div class="kpi"><div class="v" style="color:var(--away)">${pct(a)}</div><div class="l">${esc(short(L.fora))} <span class="muted">(antes ${pct(a0)})</span></div></div></div></div>`;
+  if(hist.length>=2) x+=`<h2>Probabilidades ao longo do jogo</h2><div class="card">${lineChart([{name:short(L.casa),color:"var(--home)",pts:hist.map(p=>p[1])},{name:"Empate",color:"var(--draw)",pts:hist.map(p=>p[2])},{name:short(L.fora),color:"var(--away)",pts:hist.map(p=>p[3])}],{yMin:0,yMax:1,labels:hist.map(p=>p[0]+"'")})}</div>`;
+  if((L.eventos||[]).length) x+=`<h2>Golos</h2><div class="card">`+L.eventos.map(e=>`<div class="res"><div class="m">${esc(e)}</div></div>`).join("")+`</div>`;
+  x+=`<div class="muted" style="margin-top:8px">Atualizado há ${age<1?"menos de 1":age} min. O site pode ter até ~5 min de atraso; o Telegram é mais rápido. Esta página atualiza sozinha.</div>`;
+  return x;
+}
+async function refreshLive(){
+  DATA.L=await loadLive();
+  const el=document.getElementById("aovivo");if(el) el.innerHTML=renderAoVivo(DATA.L);
+}
 function renderDesempenho(P){
   const R=P.filter(r=>r.estado==="resolvida"&&fin(r));
-  if(R.length<5) return empty("Ainda há poucos jogos avaliados. Volta daqui a alguns dias.");
+  if(R.length<5) return empty("Ainda há poucos jogos avaliados. Volta daqui a alguns dias.")+groupDuel(DATA.G);
   const hit=R.filter(r=>argmax(fin(r))===resIdx(r)).length;
   const fav=R.filter(r=>Math.max(...fin(r))>=0.6),favOk=fav.filter(r=>argmax(fin(r))===resIdx(r)).length;
   const bb=brier(R,["fH","fD","fA"]),bm=brier(R,["pH","pD","pA"]),bk=brier(R,["mH","mD","mA"]);
@@ -308,6 +357,8 @@ function renderDesempenho(P){
   let m=0,k=0,n=0;
   for(const r of R){const a=tri(r,"pH","pD","pA"),b=tri(r,"mH","mD","mA");if(!a||!b)continue;if(Math.max(...a.map((x,i)=>Math.abs(x-b[i])))<0.08)continue;
     const y=[0,0,0];y[resIdx(r)]=1;const ea=a.reduce((s,x,i)=>s+(x-y[i])**2,0),eb=b.reduce((s,x,i)=>s+(x-y[i])**2,0);n++;if(ea<eb)m++;else if(eb<ea)k++}
+  h+=goalsStats(R);
+  h+=groupDuel(DATA.G);
   if(n>=3) h+=`<h2>🥊 Modelo contra mercado</h2><div class="card">Nos <b>${n}</b> jogos em que discordavam muito: <b>Modelo ${m}</b> – <b>Mercado ${k}</b>.<div class="muted">Mostra se o modelo acrescenta alguma coisa ao que as casas de apostas já sabem.</div></div>`;
   return h;
 }
@@ -472,6 +523,7 @@ function draw(){
   document.getElementById("banca").innerHTML=renderBanca(DATA.K);
   document.getElementById("epoca").innerHTML=renderEpoca(DATA.S);
   document.getElementById("jogos").innerHTML=renderJogos(DATA.P);
+  document.getElementById("aovivo").innerHTML=renderAoVivo(DATA.L);
   document.getElementById("equipa").innerHTML=renderEquipa();
   document.getElementById("como").innerHTML=renderComo();
   bindTeamButtons();updateTeamBtn();
@@ -487,8 +539,9 @@ document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
   window.scrollTo(0,0);
 });
 (async()=>{
-  const [P,K,S,E,X]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv"),load("equipas.csv"),load("outras_ligas.csv")]);
-  DATA={P,K,S,E,X};draw();
+  const [P,K,S,E,X,G]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv"),load("equipas.csv"),load("outras_ligas.csv"),load("duelo_grupo.csv")]);
+  DATA={P,K,S,E,X,G,L:await loadLive()};draw();
+  setInterval(()=>{if(!document.hidden) refreshLive()},60000);
   updateTeamBtn();
   let visto="";try{visto=localStorage.getItem("radar_visto")||""}catch(e){}
   if(!getTeam()&&!visto) openTeamDialog(true);
