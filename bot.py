@@ -1722,6 +1722,7 @@ FAMOUS = ["benfica", "porto", "sporting", "braga", "real madrid", "barcelona", "
 LEAGUE_FAME = {"Champions League": 6, "Liga das Nações": 4, "Premier League": 3, "La Liga": 3, "Liga Portugal": 3,
                "Serie A": 2, "Bundesliga": 2, "Ligue 1": 2}
 POLL_MIN_AHEAD_MIN = 90      # só jogos que começam daqui a mais de 90 min
+POLL_CLOSE_BEFORE_MIN = 30   # a votação fecha 30 min antes do primeiro jogo da sondagem
 
 
 def fame_score(league, g):
@@ -1751,14 +1752,17 @@ def send_poll(shown, now):
         saved.append({"casa": g["home"], "fora": g["away"], "fd_casa": g.get("fd_home", ""), "fd_fora": g.get("fd_away", ""),
                       "inicio_utc": g["time"], "fH": f"{f[0]:.4f}", "fD": f"{f[1]:.4f}", "fA": f"{f[2]:.4f}",
                       "xg_casa": f"{p['lh']:.2f}" if p.get("lh") else "", "xg_fora": f"{p['la']:.2f}" if p.get("la") else ""})
+    close = min(parse_iso(o["inicio_utc"]) for o in saved) - dt.timedelta(minutes=POLL_CLOSE_BEFORE_MIN)
+    close_txt = close.astimezone(LISBON).strftime("%H:%M")
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPoll",
-                      json={"chat_id": TG_CHAT, "question": "🗳️ Que jogo queres ver AO VIVO hoje? (o mais votado é seguido minuto a minuto)",
+                      json={"chat_id": TG_CHAT, "question": f"🗳️ Que jogo queres ver AO VIVO hoje? Votação até às {close_txt}; o mais votado é seguido minuto a minuto.",
                             "options": opts, "is_anonymous": True, "allows_multiple_answers": False}, timeout=30)
     r.raise_for_status()
     res = r.json()["result"]
     os.makedirs(HIST_DIR, exist_ok=True)
     with open(POLL_FILE, "w", encoding="utf-8") as f:
-        json.dump({"date": now.date().isoformat(), "poll_id": res["poll"]["id"], "message_id": res["message_id"], "options": saved}, f)
+        json.dump({"date": now.date().isoformat(), "poll_id": res["poll"]["id"], "message_id": res["message_id"],
+                   "fecha_utc": close.strftime("%Y-%m-%dT%H:%M:%SZ"), "options": saved}, f)
 
 
 def read_votes(poll_id):
@@ -1781,6 +1785,12 @@ def auto_choice(now):
         d = json.load(f)
     if d.get("date") != now.date().isoformat():
         return None
+    if d.get("fecha_utc") and now >= parse_iso(d["fecha_utc"]):
+        try:  # fecha a sondagem: a partir daqui o resultado fica fixo (um só jogo ao vivo por dia)
+            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/stopPoll",
+                          json={"chat_id": TG_CHAT, "message_id": d["message_id"]}, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            print("stopPoll falhou (ignorado):", e, file=sys.stderr)
     votes = read_votes(d["poll_id"]) or [0] * len(d["options"])
     best = max(range(len(votes)), key=lambda i: (votes[i], -i))
     r = d["options"][best]
