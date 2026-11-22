@@ -6,7 +6,6 @@
 <title>Radar do Golo</title>
 <meta name="description" content="Radar do Golo: previsões de futebol, probabilidades ao vivo, desempenho e corrida da época.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d4aff'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='22' cy='10' r='2.4' fill='%23ffd23f'/%3E%3C/svg%3E">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <style>
 :root{
   --bg:#f5f6f8; --card:#ffffff; --ink:#15191f; --muted:#5d6672; --line:#e3e6ea;
@@ -32,7 +31,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-ap
 header{padding:18px 0 8px}
 .brand{display:flex;align-items:center;gap:12px}
 .brand>div:nth-child(2){flex:1;min-width:0}
-.auth{border:1px solid var(--accent);background:transparent;color:var(--accent);font:inherit;font-size:14px;font-weight:600;padding:7px 14px;border-radius:999px;cursor:pointer}
+.auth{max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--accent);background:transparent;color:var(--accent);font:inherit;font-size:14px;font-weight:600;padding:7px 14px;border-radius:999px;cursor:pointer}
 .auth.on{background:var(--accent);color:#fff}
 h1{font-size:22px;margin:0;letter-spacing:-.01em}
 .sub{color:var(--muted);font-size:13px;margin-top:2px}
@@ -114,7 +113,7 @@ footer a{color:var(--accent)}
   <div class="brand">
     <div class="logo" aria-hidden="true"><svg viewBox="0 0 32 32" width="34" height="34"><rect width="32" height="32" rx="9" fill="var(--accent)"/><circle cx="16" cy="16" r="9" fill="none" stroke="#fff" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="none" stroke="#fff" stroke-width="2"/><circle cx="22.5" cy="9.5" r="2.6" fill="#ffd23f"/></svg></div>
     <div><h1>Radar do Golo</h1><div class="sub" id="upd">a carregar…</div></div>
-    <button id="authBtn" class="auth">Entrar</button>
+    <button id="teamBtn" class="auth">⭐ Equipa</button>
   </div>
 </header>
 <nav role="tablist" aria-label="Secções">
@@ -124,7 +123,6 @@ footer a{color:var(--accent)}
   <button role="tab" aria-selected="false" data-t="banca">Banca</button>
   <button role="tab" aria-selected="false" data-t="epoca">Época</button>
   <button role="tab" aria-selected="false" data-t="jogos">Jogos</button>
-  <button role="tab" aria-selected="false" data-t="grupo">Grupo</button>
   <button role="tab" aria-selected="false" data-t="como">Como funciona</button>
 </nav>
 
@@ -134,7 +132,6 @@ footer a{color:var(--accent)}
 <section id="banca"></section>
 <section id="epoca"></section>
 <section id="jogos"></section>
-<section id="grupo"></section>
 <section id="como"></section>
 <dialog id="dlg"></dialog>
 
@@ -378,70 +375,45 @@ function renderComo(){
   q("E o ao vivo?","Para o jogo escolhido pelo grupo, a mensagem do Telegram atualiza-se durante o jogo com a probabilidade recalculada pelo resultado e pelo tempo que falta. Há um pequeno atraso em relação à televisão.")+
   q("Limites","Não conta lesões nem onzes (exceto lesões da Premier League), nem transferências, nem motivação. São estimativas estatísticas e podem falhar.");
 }
-/* ---------- contas (Supabase) ---------- */
-const SB_URL="https://ivxgcrodjlmabvqiqmgf.supabase.co";
-const SB_KEY="sb_publishable_oMevjL98m04XjKbV6EJ6ow_5fNj88Vr";
-let sb=null;
-try{ if(window.supabase) sb=window.supabase.createClient(SB_URL,SB_KEY); }catch(e){ sb=null }
-let ME=null, PROFILE=null, GROUP=[];
-const initials=n=>(n||"?").trim().split(/\s+/).map(w=>w[0]).slice(0,2).join("").toUpperCase();
-const errPt=m=>/Invalid login/i.test(m)?"Email ou palavra-passe errados.":/already registered/i.test(m)?"Este email já tem conta. Usa “Entrar”.":/Password should be/i.test(m)?"A palavra-passe precisa de pelo menos 6 caracteres.":/Email not confirmed/i.test(m)?"Confirma primeiro o email (vê a caixa de entrada).":/signups? not allowed|Signups not allowed/i.test(m)?"Os registos estão fechados: o grupo já está completo.":/rate limit/i.test(m)?"Muitas tentativas. Espera um pouco.":("Algo falhou: "+m);
-function teamOptions(){
-  const set=new Set();
-  (DATA.P||[]).forEach(r=>{set.add(r.casa);set.add(r.fora)});(DATA.S||[]).forEach(r=>set.add(r.equipa));
-  return [...set].filter(Boolean).sort().map(t=>`<option value="${esc(t)}">`).join("");
+/* ---------- equipa favorita (guardada neste telemóvel, sem contas) ---------- */
+const KEY="radar_equipa";
+function getTeam(){try{return localStorage.getItem(KEY)||""}catch(e){return ""}}
+function setTeam(t){try{t?localStorage.setItem(KEY,t):localStorage.removeItem(KEY)}catch(e){}}
+function teamIndex(){
+  const m={};
+  const add=(l,t)=>{if(!l||!t)return;(m[l]??=new Set()).add(t)};
+  (DATA.E||[]).forEach(r=>add(r.liga,r.equipa));              // lista completa feita pelo bot
+  (DATA.X||[]).forEach(r=>{add(r.liga,r.casa);add(r.liga,r.fora)});
+  if(!(DATA.E||[]).length){                                    // enquanto não existe, usa o que já se conhece
+    (DATA.P||[]).forEach(r=>{add(r.liga,r.casa);add(r.liga,r.fora)});
+    (DATA.S||[]).forEach(r=>add(r.liga,r.equipa));
+  }
+  return Object.fromEntries(Object.entries(m).map(([l,v])=>[l,[...v].sort((a,b)=>short(a).localeCompare(short(b),"pt"))]));
 }
-async function loadProfile(){
-  PROFILE=null;GROUP=[];
-  if(!sb||!ME) return;
-  try{
-    let {data}=await sb.from("perfis").select("*").eq("id",ME.id).maybeSingle();
-    if(!data&&ME.user_metadata?.nome){
-      const ins=await sb.from("perfis").insert({id:ME.id,nome:ME.user_metadata.nome,equipa:ME.user_metadata.equipa||null}).select().maybeSingle();
-      data=ins.data;
-    }
-    PROFILE=data||null;
-    const g=await sb.from("perfis").select("nome,equipa,criado_em").order("criado_em");
-    GROUP=g.data||[];
-  }catch(e){console.warn(e)}
+function updateTeamBtn(){
+  const b=document.getElementById("teamBtn"),t=getTeam();
+  b.classList.toggle("on",!!t);
+  b.textContent=t?("⭐ "+short(t)):"⭐ Equipa";
 }
-function updateAuthBtn(){
-  const b=document.getElementById("authBtn");
-  if(!sb){b.style.display="none";return}
-  b.classList.toggle("on",!!ME);
-  b.textContent=ME?(PROFILE?.nome||"Conta"):"Entrar";
-}
-function openAuth(mode="login"){
-  const d=document.getElementById("dlg");
-  const reg=mode==="reg";
-  d.innerHTML=`<form method="dialog" id="af">
-    <h3>${reg?"Criar conta":"Entrar"} no Radar do Golo</h3>
-    <div class="tabs2"><button type="button" data-m="login" class="${reg?"":"on"}">Entrar</button><button type="button" data-m="reg" class="${reg?"on":""}">Criar conta</button></div>
-    ${reg?`<label for="fn">O teu nome</label><input id="fn" autocomplete="nickname" maxlength="30" required>
-    <label for="ft">Equipa favorita</label><input id="ft" list="teams" placeholder="começa a escrever…"><datalist id="teams">${teamOptions()}</datalist>`:""}
-    <label for="fe">Email</label><input id="fe" type="email" autocomplete="email" required>
-    <label for="fp">Palavra-passe</label><input id="fp" type="password" autocomplete="${reg?"new-password":"current-password"}" minlength="6" required>
-    <div class="msg" id="fm" role="status"></div>
-    <div class="ctas"><button class="btn" id="fs" type="submit">${reg?"Criar conta":"Entrar"}</button><button class="btn sec" type="button" id="fc">Fechar</button></div>
+function openTeamDialog(first=false){
+  const d=document.getElementById("dlg"),cur=getTeam(),idx=teamIndex(),ligas=Object.keys(idx).sort();
+  const curLiga=ligas.find(l=>idx[l].includes(cur))||ligas[0]||"";
+  d.innerHTML=`<form method="dialog" id="tf">
+    <h3>${first?"Bem-vindo ao Radar do Golo 👋":"A tua equipa favorita"}</h3>
+    <p class="muted" style="margin:6px 0 0">${first?"Escolhe a tua equipa para veres aqui o próximo jogo, a forma e as hipóteses na época. Fica guardado neste telemóvel.":"Fica guardado neste telemóvel."}</p>
+    ${ligas.length?`<label for="fl">Liga</label><select id="fl" style="width:100%">${ligas.map(l=>`<option ${l===curLiga?"selected":""}>${esc(l)}</option>`).join("")}</select>
+    <label for="ft">Clube</label><select id="ft" style="width:100%"></select>`:`<p class="muted">As equipas aparecem assim que o bot fizer a próxima análise.</p>`}
+    <div class="ctas">${ligas.length?`<button class="btn" type="submit">Guardar</button>`:""}${cur?`<button class="btn sec" type="button" id="tr">Remover</button>`:""}<button class="btn sec" type="button" id="tc">${first?"Agora não":"Fechar"}</button></div>
   </form>`;
-  d.querySelectorAll(".tabs2 button").forEach(b=>b.onclick=()=>openAuth(b.dataset.m));
-  d.querySelector("#fc").onclick=()=>d.close();
-  d.querySelector("#af").onsubmit=async ev=>{
-    ev.preventDefault();
-    const m=d.querySelector("#fm"),btn=d.querySelector("#fs");btn.disabled=true;m.className="msg";m.textContent="A processar…";
-    const email=d.querySelector("#fe").value.trim(),password=d.querySelector("#fp").value;
-    try{
-      let res;
-      if(reg) res=await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin+location.pathname,data:{nome:d.querySelector("#fn").value.trim(),equipa:d.querySelector("#ft").value.trim()||null}}});
-      else res=await sb.auth.signInWithPassword({email,password});
-      if(res.error) throw res.error;
-      if(reg&&!res.data.session){m.className="msg ok";m.textContent="Conta criada! Confirma o email que enviámos e depois entra.";btn.disabled=false;return}
-      d.close();
-    }catch(e){m.className="msg err";m.textContent=errPt(e.message||String(e));btn.disabled=false}
-  };
+  const fl=d.querySelector("#fl"),ft=d.querySelector("#ft");
+  const fill=()=>{ft.innerHTML=(idx[fl.value]||[]).map(t=>`<option value="${esc(t)}" ${t===cur?"selected":""}>${esc(short(t))}</option>`).join("")};
+  if(fl){fill();fl.onchange=fill}
+  d.querySelector("#tc").onclick=()=>{if(first){try{localStorage.setItem("radar_visto","1")}catch(e){}}d.close()};
+  const tr=d.querySelector("#tr");if(tr) tr.onclick=()=>{setTeam("");d.close();updateTeamBtn();draw()};
+  d.querySelector("#tf").onsubmit=ev=>{ev.preventDefault();const v=ft?ft.value:"";setTeam(v);try{localStorage.setItem("radar_visto","1")}catch(e){}d.close();updateTeamBtn();draw();if(v)document.querySelector('nav button[data-t="equipa"]').click()};
   if(!d.open) d.showModal();
 }
-document.getElementById("authBtn").onclick=()=>{ME?(document.querySelector('nav button[data-t="equipa"]').click()):openAuth("login")};
+document.getElementById("teamBtn").onclick=()=>openTeamDialog(false);
 
 function nextGameFor(team){
   const now=Date.now();
@@ -456,9 +428,25 @@ function teamSim(team){
   const last=rows.map(r=>r.data).sort().pop();
   return rows.find(r=>r.data===last);
 }
+function extraFor(team){
+  const rows=(DATA.X||[]).filter(r=>sameTeam(r.casa,team)||sameTeam(r.fora,team));
+  return {liga:rows[0]?.liga,next:rows.filter(r=>r.estado==="agendado").sort((a,b)=>a.data.localeCompare(b.data))[0],last:rows.filter(r=>r.estado==="terminado").sort((a,b)=>b.data.localeCompare(a.data)).slice(0,5)};
+}
+function extraCard(r){
+  const k=new Date(r.data);
+  return `<div class="card game"><div class="top"><span>🕗 ${fmtDay(k)} · ${fmtHour(k)}</span><span>${esc(r.liga)}</span></div><div class="teams">${esc(short(r.casa))} <span class="muted">vs</span> ${esc(short(r.fora))}</div><div class="muted">Só resultados: nesta liga o bot não faz previsões.</div></div>`;
+}
 function teamPanel(team){
   let h="";
-  const g=nextGameFor(team);
+  const g=nextGameFor(team), X=extraFor(team);
+  if(!g&&(X.next||X.last.length)){
+    h+=`<h2>Próximo jogo</h2>`+(X.next?extraCard(X.next):empty("Sem jogos agendados para já."));
+    if(X.last.length){
+      const form=X.last.map(r=>{const home=sameTeam(r.casa,team),a=+r.golos_casa,b=+r.golos_fora;return a===b?"🟨":((home?a>b:b>a)?"🟩":"🟥")}).join(" ");
+      h+=`<h2>Forma recente</h2><div class="card"><div style="font-size:22px;letter-spacing:2px">${form}</div><div class="muted">Mais recente à esquerda.</div>`+X.last.map(r=>`<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> ${r.golos_casa}–${r.golos_fora} <b>${esc(short(r.fora))}</b><div class="muted">${new Date(r.data).toLocaleDateString("pt-PT",{day:"numeric",month:"short",timeZone:TZ})} · ${esc(r.liga)}</div></div></div>`).join("")+`</div>`;
+    }
+    return h;
+  }
   h+=`<h2>Próximo jogo</h2>`+(g?gameCard(g):empty("Ainda não há jogo analisado para esta equipa. O bot só analisa os jogos das ligas que cobre."));
   const L=lastGames(team);
   if(L.length){
@@ -470,39 +458,11 @@ function teamPanel(team){
   return h;
 }
 function renderEquipa(){
-  if(!sb) return empty("As contas não estão disponíveis neste momento.");
-  if(!ME) return `<div class="card"><b>Cria a tua conta</b><p class="muted">Escolhe a tua equipa favorita e vê aqui o próximo jogo, a forma e as hipóteses na época.</p><div class="ctas"><button class="btn" id="goReg">Criar conta</button><button class="btn sec" id="goLog">Já tenho conta</button></div></div>`;
-  const nome=PROFILE?.nome||ME.user_metadata?.nome||"";
-  const team=PROFILE?.equipa||"";
-  let h=`<div class="card"><div class="person" style="border:0;padding:0"><div style="display:flex;gap:12px;align-items:center"><div class="avatar">${esc(initials(nome))}</div><div><b>${esc(nome||"Sem nome")}</b><div class="muted">${team?"A seguir: "+esc(team):"Ainda sem equipa"}</div></div></div><button class="btn sec" id="signOut">Sair</button></div></div>`;
-  h+=`<form class="card" id="pf"><b>O meu perfil</b><label for="pn">Nome</label><input id="pn" maxlength="30" required value="${esc(nome)}"><label for="pt">Equipa favorita</label><input id="pt" list="teams2" value="${esc(team)}" placeholder="começa a escrever…"><datalist id="teams2">${teamOptions()}</datalist><div class="msg" id="pm" role="status"></div><div class="ctas"><button class="btn" type="submit">Guardar</button></div></form>`;
-  if(team) h+=teamPanel(team);
-  return h;
+  const team=getTeam();
+  if(!team) return `<div class="card"><b>Escolhe a tua equipa favorita</b><p class="muted">Vês aqui o próximo jogo, a forma recente e as hipóteses na época.</p><div class="ctas"><button class="btn" id="pick">⭐ Escolher equipa</button></div></div>`;
+  return `<div class="card"><div class="person" style="border:0;padding:0"><div style="display:flex;gap:12px;align-items:center"><div class="avatar">⭐</div><div><b>${esc(team)}</b><div class="muted">A tua equipa favorita</div></div></div><button class="btn sec" id="pick">Mudar</button></div></div>`+teamPanel(team);
 }
-function renderGrupo(){
-  if(!sb) return empty("As contas não estão disponíveis neste momento.");
-  if(!ME) return `<div class="card"><b>Só para membros</b><p class="muted">Entra para ver quem está no grupo e as equipas de cada um.</p><div class="ctas"><button class="btn" id="goLog2">Entrar</button></div></div>`;
-  if(!GROUP.length) return empty("Ainda não há membros.");
-  return `<div class="card">`+GROUP.map(p=>{
-    const g=p.equipa?nextGameFor(p.equipa):null;
-    return `<div class="person"><div style="display:flex;gap:12px;align-items:center;min-width:0"><div class="avatar">${esc(initials(p.nome))}</div><div style="min-width:0"><b>${esc(p.nome)}</b><div class="muted">${p.equipa?esc(p.equipa):"sem equipa"}</div></div></div><div class="muted" style="text-align:right">${g?`🕗 ${fmtDay(new Date(g.inicio_utc))}<br>${esc(short(g.casa))} vs ${esc(short(g.fora))}`:""}</div></div>`}).join("")+`</div>`;
-}
-function bindAuthButtons(){
-  const q=id=>document.getElementById(id);
-  if(q("goReg")) q("goReg").onclick=()=>openAuth("reg");
-  if(q("goLog")) q("goLog").onclick=()=>openAuth("login");
-  if(q("goLog2")) q("goLog2").onclick=()=>openAuth("login");
-  if(q("signOut")) q("signOut").onclick=async()=>{await sb.auth.signOut()};
-  const pf=q("pf");
-  if(pf) pf.onsubmit=async ev=>{
-    ev.preventDefault();const m=q("pm");m.className="msg";m.textContent="A guardar…";
-    const row={id:ME.id,nome:q("pn").value.trim(),equipa:q("pt").value.trim()||null};
-    const r=await sb.from("perfis").upsert(row);
-    if(r.error){m.className="msg err";m.textContent=errPt(r.error.message)}
-    else{await loadProfile();m.className="msg ok";m.textContent="Guardado!";draw()}
-  };
-}
-async function refreshAuth(){await loadProfile();updateAuthBtn();draw()}
+function bindTeamButtons(){const b=document.getElementById("pick");if(b)b.onclick=()=>openTeamDialog(false)}
 
 /* ---------- arranque ---------- */
 let DATA={};
@@ -513,9 +473,8 @@ function draw(){
   document.getElementById("epoca").innerHTML=renderEpoca(DATA.S);
   document.getElementById("jogos").innerHTML=renderJogos(DATA.P);
   document.getElementById("equipa").innerHTML=renderEquipa();
-  document.getElementById("grupo").innerHTML=renderGrupo();
   document.getElementById("como").innerHTML=renderComo();
-  bindAuthButtons();
+  bindTeamButtons();updateTeamBtn();
   const a=document.getElementById("selL"),b=document.getElementById("selM"),c=document.getElementById("selJ");
   if(a) a.onchange=()=>{renderEpoca.st.liga=a.value;draw()};
   if(b) b.onchange=()=>{renderEpoca.st.met=b.value;draw()};
@@ -528,12 +487,11 @@ document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
   window.scrollTo(0,0);
 });
 (async()=>{
-  const [P,K,S]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv")]);
-  DATA={P,K,S};draw();
-  if(sb){
-    const {data}=await sb.auth.getSession();ME=data.session?.user||null;await refreshAuth();
-    sb.auth.onAuthStateChange(async(ev,session)=>{ME=session?.user||null;await refreshAuth()});
-  }
+  const [P,K,S,E,X]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv"),load("equipas.csv"),load("outras_ligas.csv")]);
+  DATA={P,K,S,E,X};draw();
+  updateTeamBtn();
+  let visto="";try{visto=localStorage.getItem("radar_visto")||""}catch(e){}
+  if(!getTeam()&&!visto) openTeamDialog(true);
   const last=P.map(r=>r.enviado_em).filter(Boolean).sort().pop();
   document.getElementById("upd").textContent=last?"Última análise: "+new Date(last).toLocaleString("pt-PT",{dateStyle:"long",timeStyle:"short",timeZone:TZ}):"Ainda sem dados";
   const h=location.hash.slice(1);const b=document.querySelector(`nav button[data-t="${h}"]`);if(b)b.click();
