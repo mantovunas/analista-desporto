@@ -98,6 +98,7 @@ PRED_FIELDS = [
     "xg_casa", "xg_fora", "confianca", "estado", "golos_casa", "golos_fora", "m0H", "m0D", "m0A", "baixas_casa", "baixas_fora", "spread",
 ]
 
+SITE_URL = "https://mantovunas.github.io/analista-desporto/"
 LISBON = ZoneInfo("Europe/Lisbon")
 DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 DIAS_C = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
@@ -1125,7 +1126,8 @@ def build_blocks(results, fallback, extra=None):
         foot.append("📚 Odds: " + esc(", ".join(sorted(books))) + f" · Betclic em {nb_pref}/{len(all_games)} jogos")
     foot.append("ℹ️ <i>Previsão = sobretudo o consenso do mercado + um toque do modelo. Toca na caixa de cada jogo para ver os detalhes.</i>")
     foot.append("⚠️ <i>Estimativa estatística, não garantia. Aposta com responsabilidade.</i>")
-    foot.append("— <b>Analista Desporto</b> 🤖")
+    foot.append(f'📊 <a href="{SITE_URL}">Abrir o site</a>')
+    foot.append("— <b>Radar do Golo</b> 🎯")
     blocks.append("\n".join(foot))
     return blocks
 
@@ -1353,7 +1355,7 @@ def season_sim_blocks(models, today, store=True):
     head = (f"🏁 <b>CORRIDA DA ÉPOCA</b>\n📅 {today:%d/%m/%Y} · simulação de {SIM_RUNS} épocas\n━━━━━━━━━━━━━━━")
     note = ("<i>Cada liga é simulada {n} vezes com as forças do modelo (sem lesões, sem mercado de transferências). "
             "É uma estimativa, não uma previsão garantida. ⬆️⬇️ = mudança desde a semana passada, em pontos percentuais.</i>").format(n=SIM_RUNS)
-    return [head] + body + [note, "— <b>Analista Desporto</b> 🤖"]
+    return [head] + body + [note, "— <b>Radar do Golo</b> 🎯"]
 
 
 def luck_lines(st, finished, k=2, min_games=6):
@@ -1462,7 +1464,7 @@ def results_night(now):
         blocks.append("\n".join(sm))
     if newly:
         blocks.append(history_blocks(picks_h, preds_h, newly)[0])
-    blocks.append("— <b>Analista Desporto</b> 🤖")
+    blocks.append("— <b>Radar do Golo</b> 🎯")
     telegram(blocks)
 
 
