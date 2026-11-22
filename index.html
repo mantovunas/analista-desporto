@@ -100,6 +100,9 @@ input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .person{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
 .person:last-child{border-bottom:0}
 .avatar{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex:0 0 auto}
+details summary{cursor:pointer;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details[open] summary{margin-bottom:0}
 footer{margin-top:26px;color:var(--muted);font-size:12.5px}
 footer a{color:var(--accent)}
 .warn{font-size:12.5px;color:var(--muted);border-left:3px solid var(--draw);padding-left:10px;margin:10px 0}
@@ -122,6 +125,7 @@ footer a{color:var(--accent)}
   <button role="tab" aria-selected="false" data-t="epoca">Época</button>
   <button role="tab" aria-selected="false" data-t="jogos">Jogos</button>
   <button role="tab" aria-selected="false" data-t="grupo">Grupo</button>
+  <button role="tab" aria-selected="false" data-t="como">Como funciona</button>
 </nav>
 
 <section id="hoje" class="on"></section>
@@ -131,6 +135,7 @@ footer a{color:var(--accent)}
 <section id="epoca"></section>
 <section id="jogos"></section>
 <section id="grupo"></section>
+<section id="como"></section>
 <dialog id="dlg"></dialog>
 
 <footer>
@@ -361,6 +366,18 @@ function renderJogos(P){
   return h;
 }
 
+function renderComo(){
+  const q=(t,a)=>`<details class="card"><summary><b>${t}</b></summary><p class="muted" style="font-size:14.5px;margin:10px 0 0">${a}</p></details>`;
+  return `<div class="hero"><div class="k">Radar do Golo</div><div class="t">Probabilidades honestas, com as contas à vista</div><div class="meta">Um bot de Telegram que analisa jogos todos os dias e um site que mostra se tem razão.</div></div>`+
+  q("De onde vêm as percentagens?","De duas fontes: um modelo estatístico (golos esperados de cada equipa, a partir dos resultados desta e das últimas épocas) e o consenso das casas de apostas, depois de retirada a margem. O resultado final é sobretudo o mercado, com um toque do modelo, porque nos nossos testes o mercado é mais certeiro que o modelo sozinho.")+
+  q("O bot dá conselhos de apostas?","Não. As sugestões são odds que ficam acima do consenso, e servem para medir se o bot encontra valor. Um palpite provável não é o mesmo que um bom negócio: quanto mais provável, mais baixa a odd. Aposta com responsabilidade.")+
+  q("Como sei que não apagam os falhanços?","As previsões são gravadas num repositório público do GitHub antes dos jogos, com a hora de cada alteração. Qualquer pessoa pode ver o histórico completo.")+
+  q("O que é a “confiança”?","Indica quantos jogos o modelo tem de cada equipa e se há sinais de incerteza: muitas baixas ou casas de apostas em desacordo fazem-na descer. Não muda as percentagens.")+
+  q("O que é a banca virtual?","Uma simulação: 1 unidade em cada sugestão do bot, para ver se compensaria seguir as sugestões. Com poucas sugestões, a sorte pesa muito.")+
+  q("O que é “o bot está afinado?”","Compara o que o bot diz com o que acontece. Se disser 60% muitas vezes e acontecer perto de 60% das vezes, está bem calibrado.")+
+  q("E o ao vivo?","Para o jogo escolhido pelo grupo, a mensagem do Telegram atualiza-se durante o jogo com a probabilidade recalculada pelo resultado e pelo tempo que falta. Há um pequeno atraso em relação à televisão.")+
+  q("Limites","Não conta lesões nem onzes (exceto lesões da Premier League), nem transferências, nem motivação. São estimativas estatísticas e podem falhar.");
+}
 /* ---------- contas (Supabase) ---------- */
 const SB_URL="https://ivxgcrodjlmabvqiqmgf.supabase.co";
 const SB_KEY="sb_publishable_oMevjL98m04XjKbV6EJ6ow_5fNj88Vr";
@@ -415,7 +432,7 @@ function openAuth(mode="login"){
     const email=d.querySelector("#fe").value.trim(),password=d.querySelector("#fp").value;
     try{
       let res;
-      if(reg) res=await sb.auth.signUp({email,password,options:{data:{nome:d.querySelector("#fn").value.trim(),equipa:d.querySelector("#ft").value.trim()||null}}});
+      if(reg) res=await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin+location.pathname,data:{nome:d.querySelector("#fn").value.trim(),equipa:d.querySelector("#ft").value.trim()||null}}});
       else res=await sb.auth.signInWithPassword({email,password});
       if(res.error) throw res.error;
       if(reg&&!res.data.session){m.className="msg ok";m.textContent="Conta criada! Confirma o email que enviámos e depois entra.";btn.disabled=false;return}
@@ -497,6 +514,7 @@ function draw(){
   document.getElementById("jogos").innerHTML=renderJogos(DATA.P);
   document.getElementById("equipa").innerHTML=renderEquipa();
   document.getElementById("grupo").innerHTML=renderGrupo();
+  document.getElementById("como").innerHTML=renderComo();
   bindAuthButtons();
   const a=document.getElementById("selL"),b=document.getElementById("selM"),c=document.getElementById("selJ");
   if(a) a.onchange=()=>{renderEpoca.st.liga=a.value;draw()};
