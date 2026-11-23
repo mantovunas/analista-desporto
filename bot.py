@@ -1541,19 +1541,6 @@ def season_sim_blocks(models, today, store=True):
             print("Simulação falhou em", code, e, file=sys.stderr)
     if not body:
         return []
-    luck = []
-    for code, (name, st, finished) in models.items():
-        try:
-            ll = luck_lines(st, finished)
-        except Exception as e:  # noqa: BLE001
-            print("Sorte/azar falhou em", code, e, file=sys.stderr)
-            continue
-        if ll and (ll[0] or ll[1]):
-            luck.append(f"<b>{esc(name)}</b>" + (f"\n🍀 Sortudos: {ll[0]}" if ll[0] else "")
-                        + (f"\n😖 Azarados: {ll[1]}" if ll[1] else ""))
-    if luck:
-        body.append("🎲 <b>SORTE E AZAR</b> (pontos reais − esperados)\n\n" + "\n\n".join(luck)
-                    + "\n<i>Equipas sortudas tendem a perder terreno; as azaradas, a recuperar.</i>")
     if store:
         try:
             keep = [r for r in rows_old if r["data"] != today.isoformat()]
@@ -1564,28 +1551,6 @@ def season_sim_blocks(models, today, store=True):
     note = ("<i>Cada liga é simulada {n} vezes com as forças do modelo (sem lesões, sem mercado de transferências). "
             "É uma estimativa, não uma previsão garantida. ⬆️⬇️ = mudança desde a semana passada, em pontos percentuais.</i>").format(n=SIM_RUNS)
     return [head] + body + [note, "— <b>Radar do Golo</b> 🎯"]
-
-
-def luck_lines(st, finished, k=2, min_games=6):
-    """Pontos reais - pontos esperados pelo modelo, por equipa (positivo = sortudo)."""
-    real, exp, n = {}, {}, {}
-    for m in finished:
-        sc = score90(m)
-        h, a = m["homeTeam"]["name"], m["awayTeam"]["name"]
-        if sc is None or h not in st["att"] or a not in st["att"]:
-            continue
-        p = predict(st, h, a)
-        for t, ep, rp in ((h, 3 * p["H"] + p["D"], 3 if sc[0] > sc[1] else (1 if sc[0] == sc[1] else 0)),
-                          (a, 3 * p["A"] + p["D"], 3 if sc[1] > sc[0] else (1 if sc[0] == sc[1] else 0))):
-            real[t] = real.get(t, 0) + rp
-            exp[t] = exp.get(t, 0) + ep
-            n[t] = n.get(t, 0) + 1
-    diff = sorted(((real[t] - exp[t], t) for t in real if n[t] >= min_games), reverse=True)
-    if len(diff) < 2 * k:
-        return None
-    lucky = " · ".join(f"{esc(short_name(t))} {d:+.1f}" for d, t in diff[:k] if d > 0.5)
-    unlucky = " · ".join(f"{esc(short_name(t))} {d:+.1f}" for d, t in reversed(diff[-k:]) if d < -0.5)
-    return lucky, unlucky
 
 
 def build_model(code, name, today, matches):
