@@ -237,7 +237,8 @@ async function load(name){
 const num=x=>{const v=parseFloat(x);return Number.isFinite(v)?v:null};
 const pct=x=>Math.round(x*100)+"%";
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const short=t=>t.replace(/^1\.\s*/,"").replace(/\b(FC|CF|AFC|SAD|AC|SC|CD|AS|RC|RCD|OGC|SS|SSC|US|TSG|VfB|VfL|SV|RB)\b\.?/g," ").replace(/\s+/g," ").trim()||t;
+const ALIAS={"sporting lisbon":"Sporting","sporting cp":"Sporting","sporting clube de portugal":"Sporting","sl benfica":"Benfica","sporting braga":"Braga","sc braga":"Braga","vitoria guimaraes":"Vitória SC","vitória sc":"Vitória SC","bayern munich":"Bayern de Munique","inter milan":"Inter","ac milan":"Milan","atletico madrid":"Atlético de Madrid","atlético madrid":"Atlético de Madrid","paris saint germain":"PSG","paris saint-germain":"PSG","manchester united":"Man. United","manchester city":"Man. City"};
+const short=t=>{const c=t.replace(/^1\.\s*/,"").replace(/\b(FC|CF|AFC|SAD|AC|SC|CD|AS|RC|RCD|OGC|SS|SSC|US|TSG|VfB|VfL|SV|RB)\b\.?/g," ").replace(/\s+/g," ").trim()||t;return ALIAS[t.toLowerCase().trim()]||ALIAS[c.toLowerCase()]||c};
 const fmtDay=d=>new Intl.DateTimeFormat("pt-PT",{weekday:"long",day:"numeric",month:"long",timeZone:TZ}).format(d);
 const fmtHour=d=>new Intl.DateTimeFormat("pt-PT",{hour:"2-digit",minute:"2-digit",timeZone:TZ}).format(d);
 const dayKey=d=>new Intl.DateTimeFormat("sv-SE",{timeZone:TZ}).format(d);
