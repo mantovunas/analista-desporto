@@ -165,6 +165,17 @@ th{font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 .cover .lab{display:flex;justify-content:space-between;max-width:520px;margin:8px auto 0;font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase}
 .cover .meta{font-size:13px;color:var(--muted);margin-top:12px}
 @media (prefers-reduced-motion:no-preference){.cover .bar i{transform-origin:left;animation:fillbar 1.2s ease-out}@keyframes fillbar{from{transform:scaleX(0)}to{transform:scaleX(1)}}}
+.tbanner{position:relative;padding:22px 18px 20px;margin:14px 0 6px;overflow:hidden}
+.tbanner .tk{font-size:11px;font-weight:900;letter-spacing:.2em;text-transform:uppercase;opacity:.85}
+.tbanner .tn{font-family:var(--serif);font-weight:800;font-size:clamp(44px,13vw,96px);line-height:1.05;letter-spacing:-.03em;margin:4px 0 10px;font-variant-ligatures:none}
+.tbanner .btn.sec{background:transparent}
+.score{font-family:var(--serif);font-weight:800;font-size:clamp(70px,22vw,150px);line-height:1;letter-spacing:-.04em;font-variant-numeric:lining-nums}
+#ticker{position:fixed;left:0;right:0;bottom:0;height:40px;background:var(--ink);color:var(--bg);overflow:hidden;display:none;align-items:center;z-index:20}
+#ticker .in{display:flex;gap:36px;white-space:nowrap;font-size:12px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;padding-left:20px;animation:tick 40s linear infinite}
+#ticker .in b{color:var(--accent)}
+@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media (prefers-reduced-motion:reduce){#ticker .in{animation:none}}
+body{padding-bottom:calc(60px + env(safe-area-inset-bottom))}
 </style>
 </head>
 <body>
@@ -383,7 +394,7 @@ function renderAoVivo(L){
   const [h,d,a]=L.agora,[h0,d0,a0]=L.pre;
   const hist=L.hist||[];
   let x=`<div class="card"><div class="muted">${live?`<b style="color:var(--bad)">🔴 AO VIVO</b> · ${L.estado==="NS"?"vai começar":esc(nome)+(L.minuto?" · "+L.minuto+"'":"")}`:L.terminado?"✅ Último jogo seguido ao vivo (terminado)":"⏸️ Último jogo seguido ao vivo"}</div>
-   <div style="text-align:center;margin:10px 0"><div style="font-size:17px"><b>${esc(short(L.casa))}</b> vs <b>${esc(short(L.fora))}</b></div><div style="font-size:42px;font-weight:700;letter-spacing:.02em">${L.golos_casa} – ${L.golos_fora}</div></div>
+   <div style="text-align:center;margin:10px 0"><div style="font-size:17px"><b>${esc(short(L.casa))}</b> vs <b>${esc(short(L.fora))}</b></div><div class="score">${L.golos_casa}–${L.golos_fora}</div></div>
    <div class="kpis"><div class="kpi"><div class="v" style="color:var(--home)">${pct(h)}</div><div class="l">${esc(short(L.casa))} <span class="muted">(antes ${pct(h0)})</span></div></div>
    <div class="kpi"><div class="v" style="color:var(--draw)">${pct(d)}</div><div class="l">Empate <span class="muted">(antes ${pct(d0)})</span></div></div>
    <div class="kpi"><div class="v" style="color:var(--away)">${pct(a)}</div><div class="l">${esc(short(L.fora))} <span class="muted">(antes ${pct(a0)})</span></div></div></div></div>`;
@@ -395,6 +406,7 @@ function renderAoVivo(L){
 async function refreshLive(){
   DATA.L=await loadLive();
   const el=document.getElementById("aovivo");if(el) el.innerHTML=renderAoVivo(DATA.L);
+  drawTicker();
 }
 function renderDesempenho(P){
   const R=P.filter(r=>r.estado==="resolvida"&&fin(r));
@@ -583,16 +595,45 @@ function teamPanel(team){
   if(S) h+=`<h2>Corrida da época</h2><div class="kpis"><div class="kpi"><div class="v">${pct(num(S.p_titulo)||0)}</div><div class="l">ser campeão</div></div><div class="kpi"><div class="v">${pct(num(S.p_champions)||0)}</div><div class="l">Champions</div></div><div class="kpi"><div class="v">${pct(num(S.p_descida)||0)}</div><div class="l">descer</div></div><div class="kpi"><div class="v">${num(S.pts_esperados)??"–"}</div><div class="l">pontos esperados</div></div></div>`;
   return h;
 }
+
+const TEAMCOL={benfica:"#e30613",sporting:"#00945e",porto:"#003c8f",braga:"#c8102e","vitória sc":"#111111",arsenal:"#ef0107",chelsea:"#034694",liverpool:"#c8102e","man. united":"#da291c","man. city":"#6cabdd",tottenham:"#132257",newcastle:"#241f20","aston villa":"#670e36",everton:"#003399","real madrid":"#f2b705",barcelona:"#a50044","atlético de madrid":"#cb3524",sevilla:"#d71920",villarreal:"#f6d200","real sociedad":"#0067b1",bayern:"#dc052d","bayern de munique":"#dc052d",dortmund:"#fde100","borussia dortmund":"#fde100",leverkusen:"#e32221",psg:"#004170",marseille:"#2faee0",lyon:"#1d3f94",monaco:"#e4002b",inter:"#0068a8",milan:"#fb090b",juventus:"#111111",napoli:"#12a0d7",roma:"#8e1f2f",lazio:"#87d8f7",atalanta:"#1e71b8",flamengo:"#c3281d",palmeiras:"#006437",corinthians:"#111111","são paulo":"#e30613",fluminense:"#7a1f3d",botafogo:"#111111",santos:"#111111",grêmio:"#0d80bf",internacional:"#e30613",cruzeiro:"#0a3a9c"};
+function teamColor(t){const k=short(t).toLowerCase();for(const n in TEAMCOL){if(k===n||k.includes(n))return TEAMCOL[n]}return null}
+function inkOn(hex){const n=parseInt(hex.slice(1),16),r=n>>16,g=n>>8&255,b=n&255;return (0.299*r+0.587*g+0.114*b)>150?"#141210":"#ffffff"}
+function teamBanner(team){
+  const c=teamColor(team)||"#141210",ink=inkOn(c);
+  return `<div class="tbanner" style="background:${c};color:${ink}"><div class="tk">A tua equipa</div><div class="tn">${esc(short(team))}</div><button class="btn sec" id="pick" style="color:${ink};border-color:${ink}">Mudar</button></div>`;
+}
 function renderEquipa(){
   const team=getTeam();
   if(!team) return `<div class="card"><b>Escolhe a tua equipa favorita</b><p class="muted">Vês aqui o próximo jogo, a forma recente e as hipóteses na época.</p><div class="ctas"><button class="btn" id="pick">⭐ Escolher equipa</button></div></div>`;
-  return `<div class="card"><div class="person" style="border:0;padding:0"><div style="display:flex;gap:12px;align-items:center"><div class="avatar">⭐</div><div><b>${esc(team)}</b><div class="muted">A tua equipa favorita</div></div></div><button class="btn sec" id="pick">Mudar</button></div></div>`+teamPanel(team);
+  return teamBanner(team)+teamPanel(team);
 }
 function bindTeamButtons(){const b=document.getElementById("pick");if(b)b.onclick=()=>openTeamDialog(false)}
 
 /* ---------- arranque ---------- */
 let DATA={};
+
+function drawTicker(){
+  const P=DATA.P||[],items=[];
+  try{
+    const y=new Date(Date.now()-864e5),yk=dayKey(y);
+    const R=P.filter(r=>r.estado==="resolvida"&&fin(r)&&dayKey(new Date(r.inicio_utc))===yk);
+    if(R.length>=2){const ok=R.filter(r=>argmax(fin(r))===resIdx(r)).length;items.push(`Ontem o bot acertou <b>${ok}/${R.length}</b>`)}
+    const A=P.filter(r=>r.estado==="resolvida"&&fin(r)).sort((a,b)=>a.inicio_utc.localeCompare(b.inicio_utc));
+    let cur=0;for(const r of A){cur=argmax(fin(r))===resIdx(r)?cur+1:0}
+    if(cur>=3) items.push(`Sequência de <b>${cur}</b> acertos`);
+    const L=DATA.L; if(L&&!L.terminado&&(Date.now()-new Date(L.atualizado))<20*60e3) items.push(`<b>Ao vivo</b> ${esc(short(L.casa))} ${L.golos_casa}–${L.golos_fora} ${esc(short(L.fora))}`);
+    const up=P.filter(r=>r.estado==="pendente"&&new Date(r.inicio_utc)>new Date()).length;
+    if(up) items.push(`${up} jogos analisados à frente`);
+  }catch(e){}
+  const box=document.getElementById("ticker"),inn=document.getElementById("tickIn");
+  if(!box||!inn) return;
+  if(!items.length){box.style.display="none";return}
+  const one=items.map(t=>`<span>${t}</span><span style="color:var(--accent)">●</span>`).join("");
+  inn.innerHTML=one+one+one+one;box.style.display="flex";
+}
 function draw(){
+  drawTicker();
   document.getElementById("hoje").innerHTML=renderHoje(DATA.P);
   document.getElementById("desempenho").innerHTML=renderDesempenho(DATA.P);
   document.getElementById("banca").innerHTML=renderBanca(DATA.K);
@@ -625,5 +666,6 @@ document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
   const h=location.hash.slice(1);const b=document.querySelector(`nav button[data-t="${h}"]`);if(b)b.click();
 })();
 </script>
+<div id="ticker" aria-hidden="true"><div class="in" id="tickIn"></div></div>
 </body>
 </html>
