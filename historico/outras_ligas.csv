@@ -1,0 +1,61 @@
+liga,data,casa,fora,golos_casa,golos_fora,estado
+Brasileirão,2026-11-22T22:30:00Z,RB Bragantino,CR Vasco da Gama,1,0,terminado
+Brasileirão,2026-11-22T21:30:00Z,Fluminense FC,Mirassol FC,1,0,terminado
+Brasileirão,2026-11-22T19:00:00Z,CA Paranaense,Clube do Remo,4,2,terminado
+Brasileirão,2026-11-22T00:00:00Z,Chapecoense AF,Cruzeiro EC,1,2,terminado
+Brasileirão,2026-11-21T20:30:00Z,EC Bahia,Coritiba FBC,0,1,terminado
+Brasileirão,2026-11-21T19:30:00Z,SE Palmeiras,CR Flamengo,1,1,terminado
+Brasileirão,2026-11-20T00:30:00Z,São Paulo FC,Fluminense FC,0,1,terminado
+Brasileirão,2026-11-19T22:30:00Z,CR Vasco da Gama,SC Internacional,2,1,terminado
+Brasileirão,2026-11-19T22:30:00Z,EC Vitória,RB Bragantino,2,1,terminado
+Brasileirão,2026-11-19T00:30:00Z,SC Corinthians Paulista,Botafogo FR,4,0,terminado
+Brasileirão,2026-11-19T00:30:00Z,Grêmio FBPA,EC Bahia,0,0,terminado
+Brasileirão,2026-11-18T23:30:00Z,Cruzeiro EC,SE Palmeiras,2,1,terminado
+Brasileirão,2026-11-18T23:30:00Z,CR Flamengo,CA Paranaense,2,1,terminado
+Brasileirão,2026-11-18T23:00:00Z,Clube do Remo,Chapecoense AF,2,0,terminado
+Brasileirão,2026-11-18T22:30:00Z,Coritiba FBC,Santos FC,0,1,terminado
+Brasileirão,2026-11-14T23:30:00Z,Chapecoense AF,CR Vasco da Gama,0,2,terminado
+Brasileirão,2026-11-14T21:30:00Z,Mirassol FC,CA Mineiro,0,0,terminado
+Brasileirão,2026-11-06T23:00:00Z,EC Vitória,Fluminense FC,0,3,terminado
+Brasileirão,2026-11-06T00:30:00Z,Cruzeiro EC,EC Bahia,3,2,terminado
+Brasileirão,2026-11-05T22:30:00Z,SE Palmeiras,Clube do Remo,6,1,terminado
+Brasileirão,2026-11-05T00:30:00Z,Botafogo FR,CA Mineiro,1,0,terminado
+Brasileirão,2026-11-05T00:30:00Z,São Paulo FC,SC Corinthians Paulista,0,0,terminado
+Brasileirão,2026-11-04T22:30:00Z,CA Paranaense,CR Vasco da Gama,1,3,terminado
+Brasileirão,2026-11-04T22:30:00Z,CR Flamengo,Grêmio FBPA,3,1,terminado
+Brasileirão,2026-11-04T00:30:00Z,SC Internacional,Coritiba FBC,1,0,terminado
+Brasileirão,2026-11-03T22:30:00Z,Chapecoense AF,Mirassol FC,1,2,terminado
+Brasileirão,2026-11-02T23:00:00Z,RB Bragantino,Santos FC,2,1,terminado
+Brasileirão,2026-10-31T19:00:00Z,Coritiba FBC,EC Vitória,2,0,terminado
+Brasileirão,2026-10-30T23:00:00Z,SC Corinthians Paulista,Mirassol FC,2,0,terminado
+Brasileirão,2026-10-30T00:30:00Z,Grêmio FBPA,CA Paranaense,2,0,terminado
+Brasileirão,2026-10-29T23:00:00Z,CR Vasco da Gama,CR Flamengo,1,4,terminado
+Brasileirão,2026-10-29T22:30:00Z,CA Mineiro,Cruzeiro EC,0,1,terminado
+Brasileirão,2026-10-29T00:30:00Z,EC Bahia,São Paulo FC,3,2,terminado
+Brasileirão,2026-10-29T00:30:00Z,Clube do Remo,Botafogo FR,2,1,terminado
+Brasileirão,2026-10-28T22:30:00Z,RB Bragantino,Chapecoense AF,3,0,terminado
+Brasileirão,2026-10-28T22:30:00Z,Fluminense FC,SC Internacional,2,1,terminado
+Brasileirão,2026-10-28T22:30:00Z,Santos FC,SE Palmeiras,0,0,terminado
+Brasileirão,2026-10-26T23:00:00Z,CR Flamengo,CA Mineiro,3,2,terminado
+Brasileirão,2026-10-26T22:30:00Z,Coritiba FBC,Grêmio FBPA,0,1,terminado
+Brasileirão,2026-10-25T01:00:00Z,Santos FC,EC Bahia,1,1,terminado
+Brasileirão,2026-11-23T22:30:00Z,SC Internacional,EC Vitória,,,agendado
+Brasileirão,2026-11-23T23:00:00Z,Botafogo FR,São Paulo FC,,,agendado
+Brasileirão,2026-11-24T00:00:00Z,Santos FC,Grêmio FBPA,,,agendado
+Brasileirão,2026-11-24T21:00:00Z,Chapecoense AF,SE Palmeiras,,,agendado
+Brasileirão,2026-11-25T23:00:00Z,CA Mineiro,SC Corinthians Paulista,,,agendado
+Brasileirão,2026-11-26T23:00:00Z,São Paulo FC,Clube do Remo,,,agendado
+Brasileirão,2026-11-27T23:00:00Z,Fluminense FC,Cruzeiro EC,,,agendado
+Brasileirão,2026-11-29T00:00:00Z,Botafogo FR,EC Bahia,,,agendado
+Brasileirão,2026-11-29T19:00:00Z,Coritiba FBC,CR Flamengo,,,agendado
+Brasileirão,2026-11-29T19:00:00Z,EC Vitória,Santos FC,,,agendado
+Brasileirão,2026-11-29T21:30:00Z,SC Corinthians Paulista,Grêmio FBPA,,,agendado
+Brasileirão,2026-11-29T21:30:00Z,SC Internacional,RB Bragantino,,,agendado
+Brasileirão,2026-11-29T21:30:00Z,Mirassol FC,CA Paranaense,,,agendado
+Brasileirão,2026-11-29T22:30:00Z,CA Mineiro,CR Vasco da Gama,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,CA Paranaense,São Paulo FC,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,EC Bahia,CA Mineiro,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,RB Bragantino,Fluminense FC,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,Cruzeiro EC,SC Internacional,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,CR Flamengo,Chapecoense AF,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,Grêmio FBPA,Mirassol FC,,,agendado
