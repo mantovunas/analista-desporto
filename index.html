@@ -165,6 +165,12 @@ th{font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 .cover .lab{display:flex;justify-content:space-between;max-width:520px;margin:8px auto 0;font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase}
 .cover .meta{font-size:13px;color:var(--muted);margin-top:12px}
 @media (prefers-reduced-motion:no-preference){.cover .bar i{transform-origin:left;animation:fillbar 1.2s ease-out}@keyframes fillbar{from{transform:scaleX(0)}to{transform:scaleX(1)}}}
+.lead{padding:22px 0 14px;text-align:center;border-bottom:2px solid var(--ink);margin-bottom:12px}
+.lead .k{font-size:11px;font-weight:900;letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
+.lead .big{display:flex;justify-content:center;align-items:flex-start;font-family:var(--serif);font-weight:800;line-height:1;margin-top:6px}
+.lead .n{font-size:clamp(100px,30vw,190px);line-height:1;letter-spacing:-.04em;padding-bottom:.08em;font-variant-numeric:lining-nums;font-feature-settings:"lnum" 1}
+.lead .p{font-size:clamp(36px,10vw,70px);color:var(--accent);margin-top:.35em;margin-left:5px}
+.lead .cap{font-size:15px;margin-top:6px;color:var(--muted)}
 .tbanner{position:relative;padding:22px 18px 20px;margin:14px 0 6px;overflow:hidden}
 .tbanner .tk{font-size:11px;font-weight:900;letter-spacing:.2em;text-transform:uppercase;opacity:.85}
 .tbanner .tn{font-family:var(--serif);font-weight:800;font-size:clamp(44px,13vw,96px);line-height:1.05;letter-spacing:-.03em;margin:4px 0 10px;font-variant-ligatures:none}
@@ -415,7 +421,10 @@ function renderDesempenho(P){
   const hit=R.filter(r=>argmax(fin(r))===resIdx(r)).length;
   const fav=R.filter(r=>Math.max(...fin(r))>=0.6),favOk=fav.filter(r=>argmax(fin(r))===resIdx(r)).length;
   const bb=brier(R,["fH","fD","fA"]),bm=brier(R,["pH","pD","pA"]),bk=brier(R,["mH","mD","mA"]);
-  let h=`<div class="kpis">
+  const vs=(bb&&bk)?(bb<bk?"O bot está <b>ligeiramente melhor</b> que o mercado sozinho.":bb>bk?"O mercado sozinho está <b>ligeiramente melhor</b> que o bot.":"Bot e mercado estão ao mesmo nível."):"";
+  let h=`<div class="lead"><div class="k">A edição do desempenho</div><div class="big"><span class="n">${Math.round(hit/R.length*100)}</span><span class="p">%</span></div>
+   <div class="cap">dos resultados acertados em <b>${R.length}</b> jogos. Sem saber nada, acertava-se uns 33%.</div><div class="cap">${vs}</div></div>
+   <div class="kpis">
    <div class="kpi"><div class="v">${R.length}</div><div class="l">jogos avaliados</div></div>
    <div class="kpi"><div class="v">${pct(hit/R.length)}</div><div class="l">resultado mais provável acertou</div></div>
    <div class="kpi"><div class="v">${fav.length?pct(favOk/fav.length):"–"}</div><div class="l">favoritos claros (${favOk}/${fav.length})</div></div>
