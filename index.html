@@ -176,6 +176,7 @@ th{font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 @keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 @media (prefers-reduced-motion:reduce){#ticker .in{animation:none}}
 body{padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+@media (prefers-reduced-motion:no-preference){.rv{opacity:0;transform:translateY(22px);transition:opacity .6s ease,transform .6s ease}.rv.in{opacity:1;transform:none}}
 </style>
 </head>
 <body>
@@ -664,6 +665,19 @@ document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
   const last=P.map(r=>r.enviado_em).filter(Boolean).sort().pop();
   document.getElementById("upd").textContent=last?"Última análise: "+new Date(last).toLocaleString("pt-PT",{dateStyle:"long",timeStyle:"short",timeZone:TZ}):"Ainda sem dados";
   const h=location.hash.slice(1);const b=document.querySelector(`nav button[data-t="${h}"]`);if(b)b.click();
+})();
+
+/* ---------- aparecer ao fazer scroll ---------- */
+(function(){
+  if(!("IntersectionObserver" in window)||matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add("in");io.unobserve(e.target)}}),{threshold:.08});
+  const SEL="section .card, section .kpi, section .cover, section .tbanner, section h2, section .game";
+  let busy=false;
+  function scan(){busy=false;document.querySelectorAll(SEL).forEach(el=>{if(el.dataset.rv)return;el.dataset.rv="1";el.classList.add("rv");io.observe(el)})}
+  new MutationObserver(()=>{if(!busy){busy=true;requestAnimationFrame(scan)}}).observe(document.body,{childList:true,subtree:true});
+  document.addEventListener("click",()=>setTimeout(scan,50));
+  setTimeout(()=>document.querySelectorAll(".rv:not(.in)").forEach(el=>{const r=el.getBoundingClientRect();if(r.top<innerHeight&&r.bottom>0)el.classList.add("in")}),2500);
+  scan();
 })();
 </script>
 <div id="ticker" aria-hidden="true"><div class="in" id="tickIn"></div></div>
