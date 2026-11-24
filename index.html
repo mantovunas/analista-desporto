@@ -182,6 +182,11 @@ th{font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 @keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 @media (prefers-reduced-motion:reduce){#ticker .in{animation:none}}
 body{padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+.res .sc{font-family:var(--serif);font-weight:800;font-size:22px;padding:0 4px;font-variant-numeric:lining-nums}
+.res .m b{font-weight:800}
+.res .s{font-family:var(--serif);font-weight:800;font-size:20px}
+.card table{width:100%}.card td{padding:9px 6px 9px 0;border-bottom:1px solid var(--line)}.card tr:first-child th{border-bottom:2px solid var(--ink);padding-bottom:6px;font-size:11px}
+.lead .n.ok{color:var(--good)}.lead .n.no{color:var(--bad)}
 @media (prefers-reduced-motion:no-preference){.rv{opacity:0;transform:translateY(22px);transition:opacity .6s ease,transform .6s ease}.rv.in{opacity:1;transform:none}}
 </style>
 </head>
@@ -455,7 +460,7 @@ function renderBanca(K){
   let c=0;const cum=R.map(r=>(c+=num(r.lucro)));
   const wins=R.filter(r=>r.estado==="ganha").length;
   const lo=Math.min(0,...cum),hi=Math.max(1,...cum);
-  let h=`<div class="kpis">
+  let h=`<div class="lead"><div class="k">A edição da banca</div><div class="big"><span class="n ${c>=0?"ok":"no"}">${c>=0?"+":"−"}${Math.abs(c).toFixed(1)}</span></div><div class="cap">unidades em ${R.length} sugestões · ROI ${(c/R.length*100).toFixed(0)}%</div></div><div class="kpis">
    <div class="kpi"><div class="v ${c>=0?"ok":"no"}">${c>=0?"+":""}${c.toFixed(2)}</div><div class="l">unidades (1 por sugestão)</div></div>
    <div class="kpi"><div class="v">${(c/R.length*100).toFixed(0)}%</div><div class="l">ROI</div></div>
    <div class="kpi"><div class="v">${R.length}</div><div class="l">sugestões resolvidas</div></div>
@@ -480,6 +485,7 @@ function renderEpoca(S){
   const name={p_titulo:"campeão",p_champions:"Champions",p_descida:"descida"}[st.met];
   let h=`<select id="selL" aria-label="Liga">${leagues.map(l=>`<option ${l===st.liga?"selected":""}>${esc(l)}</option>`).join("")}</select>
    <select id="selM" aria-label="Métrica"><option value="p_titulo" ${st.met==="p_titulo"?"selected":""}>Ser campeão</option><option value="p_champions" ${st.met==="p_champions"?"selected":""}>Champions</option><option value="p_descida" ${st.met==="p_descida"?"selected":""}>Descer</option></select>`;
+  if(teams.length&&by[teams[0]][last]!=null){const v0=by[teams[0]][last]*100;h+=`<div class="lead"><div class="k">Favorito a ${name} · ${esc(st.liga)}</div><div class="big"><span class="n">${v0<10?v0.toFixed(1):Math.round(v0)}</span><span class="p">%</span></div><div class="cap serif" style="font-family:var(--serif);font-weight:800;font-size:28px;color:var(--ink)">${esc(short(teams[0]))}</div></div>`}
   h+=`<div class="card"><b>Probabilidade de ${name}</b><div class="muted">Simulação semanal da época. Atualizado em ${new Date(last+"T12:00:00").toLocaleDateString("pt-PT",{day:"numeric",month:"long"})}.</div>${lineChart(ser,{yMin:0,yMax:[.04,.08,.2,.4,.8,1].find(v=>v>=mx)||1,labels:dates.map(d=>new Date(d+"T12:00:00").toLocaleDateString("pt-PT",{day:"numeric",month:"short"}))})}</div>`;
   h+=`<div class="card"><table><tr><th>Equipa</th><th>${name}</th><th>Δ semana</th><th>Pts esp.</th></tr>`+teams.map(t=>{
     const v=by[t][last],p=prev?by[t][prev]:null,d=(v!=null&&p!=null)?(v-p)*100:null;
@@ -494,9 +500,11 @@ function renderJogos(P){
   const st=renderJogos.st||(renderJogos.st={liga:"Todas"});
   const rows=R.filter(r=>st.liga==="Todas"||r.liga===st.liga);
   let h=`<select id="selJ" aria-label="Liga">${leagues.map(l=>`<option ${l===st.liga?"selected":""}>${esc(l)}</option>`).join("")}</select>`;
+  const hitN=rows.filter(r=>argmax(fin(r))===resIdx(r)).length;
+  h+=`<div class="lead"><div class="k">Arquivo · ${esc(st.liga)}</div><div class="big"><span class="n">${hitN}</span><span class="p" style="color:var(--muted)">/${rows.length}</span></div><div class="cap">palpites certos do bot neste arquivo</div></div>`;
   h+=`<div class="card">`+rows.slice(0,60).map(r=>{
     const f=fin(r),top=argmax(f),ok=top===resIdx(r),d=new Date(r.inicio_utc);
-    return `<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> ${r.golos_casa}–${r.golos_fora} <b>${esc(short(r.fora))}</b><div class="muted">${d.toLocaleDateString("pt-PT",{day:"numeric",month:"short",timeZone:TZ})} · ${esc(r.liga)} · previsto ${["casa","empate","fora"][top]} ${pct(f[top])}</div></div><div class="s ${ok?"ok":"no"}">${ok?"✅":"❌"}</div></div>`}).join("")+`</div>`;
+    return `<div class="res"><div class="m"><b>${esc(short(r.casa))}</b> <span class="sc">${r.golos_casa}–${r.golos_fora}</span> <b>${esc(short(r.fora))}</b><div class="muted">${d.toLocaleDateString("pt-PT",{day:"numeric",month:"short",timeZone:TZ})} · ${esc(r.liga)} · previsto ${["casa","empate","fora"][top]} ${pct(f[top])}</div></div><div class="s ${ok?"ok":"no"}">${ok?"✅":"❌"}</div></div>`}).join("")+`</div>`;
   if(rows.length>60) h+=`<div class="muted">A mostrar os 60 mais recentes de ${rows.length}.</div>`;
   return h;
 }
