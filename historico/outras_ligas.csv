@@ -1,4 +1,7 @@
 liga,data,casa,fora,golos_casa,golos_fora,estado
+Brasileirão,2026-11-24T00:00:00Z,Santos FC,Grêmio FBPA,0,2,terminado
+Brasileirão,2026-11-23T23:00:00Z,Botafogo FR,São Paulo FC,1,1,terminado
+Brasileirão,2026-11-23T22:30:00Z,SC Internacional,EC Vitória,2,5,terminado
 Brasileirão,2026-11-22T22:30:00Z,RB Bragantino,CR Vasco da Gama,1,0,terminado
 Brasileirão,2026-11-22T21:30:00Z,Fluminense FC,Mirassol FC,1,0,terminado
 Brasileirão,2026-11-22T19:00:00Z,CA Paranaense,Clube do Remo,4,2,terminado
@@ -36,12 +39,6 @@ Brasileirão,2026-10-29T00:30:00Z,Clube do Remo,Botafogo FR,2,1,terminado
 Brasileirão,2026-10-28T22:30:00Z,RB Bragantino,Chapecoense AF,3,0,terminado
 Brasileirão,2026-10-28T22:30:00Z,Fluminense FC,SC Internacional,2,1,terminado
 Brasileirão,2026-10-28T22:30:00Z,Santos FC,SE Palmeiras,0,0,terminado
-Brasileirão,2026-10-26T23:00:00Z,CR Flamengo,CA Mineiro,3,2,terminado
-Brasileirão,2026-10-26T22:30:00Z,Coritiba FBC,Grêmio FBPA,0,1,terminado
-Brasileirão,2026-10-25T01:00:00Z,Santos FC,EC Bahia,1,1,terminado
-Brasileirão,2026-11-23T22:30:00Z,SC Internacional,EC Vitória,,,agendado
-Brasileirão,2026-11-23T23:00:00Z,Botafogo FR,São Paulo FC,,,agendado
-Brasileirão,2026-11-24T00:00:00Z,Santos FC,Grêmio FBPA,,,agendado
 Brasileirão,2026-11-24T21:00:00Z,Chapecoense AF,SE Palmeiras,,,agendado
 Brasileirão,2026-11-25T23:00:00Z,CA Mineiro,SC Corinthians Paulista,,,agendado
 Brasileirão,2026-11-26T23:00:00Z,São Paulo FC,Clube do Remo,,,agendado
@@ -59,3 +56,6 @@ Brasileirão,2026-12-03T00:30:00Z,RB Bragantino,Fluminense FC,,,agendado
 Brasileirão,2026-12-03T00:30:00Z,Cruzeiro EC,SC Internacional,,,agendado
 Brasileirão,2026-12-03T00:30:00Z,CR Flamengo,Chapecoense AF,,,agendado
 Brasileirão,2026-12-03T00:30:00Z,Grêmio FBPA,Mirassol FC,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,SE Palmeiras,Coritiba FBC,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,Clube do Remo,SC Corinthians Paulista,,,agendado
+Brasileirão,2026-12-03T00:30:00Z,Santos FC,Botafogo FR,,,agendado
