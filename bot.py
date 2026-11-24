@@ -1077,6 +1077,34 @@ def weekly_block(picks, preds, now):
     return "\n".join(lines)
 
 
+def weekly_card_html(picks, preds, now):
+    lo = now - dt.timedelta(days=7)
+    rp = [r for r in preds if r.get("estado") == "resolvida" and lo <= parse_iso(r["inicio_utc"]) <= now]
+    if not rp:
+        return None
+    hit = sum(1 for r in rp if _final_probs(r) and _final_probs(r).index(max(_final_probs(r))) == _result_idx(r))
+    fav = [r for r in rp if _final_probs(r) and max(_final_probs(r)) >= CLEAR_FAV]
+    fok = sum(1 for r in fav if _final_probs(r).index(max(_final_probs(r))) == _result_idx(r))
+    wk = [r for r in picks if r.get("estado") in ("ganha", "perdida") and lo <= parse_iso(r["inicio_utc"]) <= now]
+    profit = sum(float(r["lucro"]) for r in wk) if wk else None
+    side = [(f"{fok}/{len(fav)}", "favoritos claros")] if fav else []
+    if wk:
+        side.append((f"{profit:+.1f}", f"unidades em {len(wk)} sugestões"))
+    side_html = "".join(f'<div style="margin-top:22px"><div class="serif" style="font-size:64px;line-height:1">{a}</div><div style="font-size:20px;font-weight:900;letter-spacing:.14em;color:#6a6558;text-transform:uppercase;margin-top:4px">{b}</div></div>' for a, b in side)
+    hl = [re.sub(r"<[^>]+>", "", x) for x in week_highlights(rp, lo) if x]
+    hl_html = "".join(f'<div style="font-size:26px;line-height:1.3;margin-top:14px">{esc(x)}</div>' for x in hl[:4])
+    pct = round(100 * hit / len(rp))
+    return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>A semana passada</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>
+<div style="display:flex;padding:34px 56px 0;gap:40px;align-items:flex-start"><div style="flex:1.3"><div style="font-size:20px;font-weight:900;letter-spacing:.2em;color:#e4372c">RESULTADO MAIS PROVÁVEL ACERTOU</div>
+<div class="serif" style="font-size:210px;line-height:1;letter-spacing:-.04em">{hit}<span style="font-size:90px;color:#6a6558">/{len(rp)}</span></div>
+<div style="font-size:28px;font-weight:900">{pct}% dos {len(rp)} jogos</div></div>
+<div style="flex:1;border-left:4px solid #141210;padding-left:32px">{side_html}</div></div>
+<div style="padding:26px 56px 0;border-top:4px solid #141210;margin:30px 56px 0;padding-left:0;padding-right:0">{hl_html}</div>
+<div style="position:absolute;left:56px;bottom:90px;font-size:18px;color:#6a6558">Uma semana é pouco: só dá para tirar conclusões com várias semanas.</div>
+<div class="foot"><span>Radar do Golo</span><b>●</b><span>Resumo semanal</span></div></body></html>""")
+
+
 CAL_BINS = [(0, .2), (.2, .4), (.4, .6), (.6, .8), (.8, 1.01)]
 
 
@@ -2874,14 +2902,24 @@ def main(now=None):
     except Exception as e:  # noqa: BLE001
         print("equipas.csv falhou:", e, file=sys.stderr)
     cards_ok = False
+    weekly_done = False
     try:
         cards_ok = league_cards(shown, now)   # primeiro todas as ligas...
         morning_card(shown, now)              # ...e no fim o jogo do dia
+        if now.astimezone(LISBON).weekday() == 0:
+            try:
+                wh = weekly_card_html(read_csv(PICKS_FILE), read_csv(PREDS_FILE), now)
+                if wh and send_card(wh, "📅 <b>A semana passada</b>"):
+                    weekly_done = True
+            except Exception as e:  # noqa: BLE001
+                print("Cartão semanal falhou:", e, file=sys.stderr)
         gemini_card(summary, news, now)       # cartão da IA (leitura do dia + notícias)
     except Exception as e:  # noqa: BLE001
         print("Cartões da manhã falharam:", e, file=sys.stderr)
     if not cards_ok or os.getenv("TEXTO_TAMBEM"):   # com cartões enviados, o texto fica só como reserva
         telegram(blocks)
+    elif extra:   # sugestões, banca, calibração...: continuam em texto curto (o resumo semanal já foi em cartão)
+        telegram([b for b in extra if not (weekly_done and b.startswith("📅"))])
     mark_sent(now)
     try:
         send_poll(shown, now)
