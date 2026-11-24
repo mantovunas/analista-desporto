@@ -1979,6 +1979,23 @@ def onze_line(side_icon, team, lu, prev_ids):
     return line
 
 
+def onze_card_html(r, lh, la, prev_h, prev_a):
+    """Cartão 'Onzes iniciais': duas colunas com os 11 de cada equipa."""
+    def col(team, lu, prev, colr):
+        ch = sum(1 for i, _ in lu["xi"] if i not in prev) if prev else None
+        rot = ""
+        if ch is not None:
+            rot = f'<div style="margin-top:14px;font-size:22px;font-weight:900;color:{"#e4372c" if ch >= ONZE_ROTATION else "#6a6558"}">🔄 {ch} mudança(s){" · muita rotação" if ch >= ONZE_ROTATION else ""}</div>'
+        names = "".join(f'<div style="font-size:30px;line-height:1.28">{esc(n.split()[-1])}</div>' for _, n in lu["xi"])
+        return (f'<div style="flex:1;padding:0 28px"><div class="serif" style="font-size:40px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{esc(short_name(team))}</div>'
+                f'<div style="font-size:22px;font-weight:900;letter-spacing:.16em;color:{colr};margin:6px 0 12px">{esc(lu.get("formacao") or "")}</div>{names}{rot}</div>')
+    t = parse_iso(r["inicio_utc"]).astimezone(LISBON)
+    return (CARD_HEAD + f"""<div class="top"><span>Onzes iniciais</span><span>{t:%H:%M}</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>
+<div style="display:flex;margin-top:34px;padding:0 28px">{col(r['casa'], lh, prev_h, '#141210')}<div style="width:4px;background:#141210"></div>{col(r['fora'], la, prev_a, '#e4372c')}</div>
+<div class="foot"><span>Radar do Golo</span><b>●</b><span>Só informativo</span></div></body></html>""")
+
+
 def lineups_mode(now):
     """Envia o onze inicial dos jogos analisados que começam daqui a pouco (se já estiver publicado)."""
     if not AF_KEY:
@@ -2031,6 +2048,12 @@ def lineups_mode(now):
                     reqs[0] += 1
                     pl = af_lineup(last[0]["fixture"]["id"])
                     prev[tid] = {i for i, _ in pl.get(tid, {}).get("xi", [])}
+            try:
+                if send_card(onze_card_html(r, lu[hid], lu[aid], prev.get(hid), prev.get(aid)), f"📋 <b>Onzes iniciais</b> · {esc(short_name(r['casa']))} vs {esc(short_name(r['fora']))}"):
+                    newly.append(r["id"])
+                    continue
+            except Exception as e:  # noqa: BLE001
+                print("Cartão de onzes falhou:", e, file=sys.stderr)
             blocks.append(f"📋 <b>ONZES INICIAIS</b> · 🕗 <i>{fmt_time(r['inicio_utc'])}</i>\n"
                           f"<b>{esc(r['casa'])}</b> vs <b>{esc(r['fora'])}</b>\n\n"
                           + onze_line("🏠", r["casa"], lu[hid], prev.get(hid)) + "\n\n"
@@ -2040,8 +2063,9 @@ def lineups_mode(now):
         except Exception as e:  # noqa: BLE001
             print("Onzes falharam:", r.get("casa"), e, file=sys.stderr)
     print(f"Onzes: {len(blocks)} jogo(s), {reqs[0]} pedidos.", file=sys.stderr)
-    if blocks:
-        telegram(blocks)
+    if blocks or newly:
+        if blocks:
+            telegram(blocks)
         os.makedirs(HIST_DIR, exist_ok=True)
         with open(ONZE_FILE, "a", encoding="utf-8") as f:
             f.write("\n".join(newly) + "\n")
