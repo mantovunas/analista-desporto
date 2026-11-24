@@ -1441,7 +1441,7 @@ def _card_date(now):
     return f"{DIAS[d.weekday()]}, {d:%d/%m/%Y}"
 
 
-def cover_html(g, now, extra=""):
+def cover_html(g, now, extra="", tag="O jogo do dia"):
     f = g["final"]
     i = f.index(max(f))
     win = f"{short_name(g['home'])} ganha" if i == 0 else f"{short_name(g['away'])} ganha" if i == 2 else "Empate"
@@ -1455,7 +1455,7 @@ def cover_html(g, now, extra=""):
         pass
     return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>Edição de hoje</span></div>
 <div class="mast serif">Radar do Golo</div>
-<div style="text-align:center;margin-top:30px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">O jogo do dia · {t:%H:%M}</span></div>
+<div style="text-align:center;margin-top:30px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">{esc(tag)} · {t:%H:%M}</span></div>
 <div class="serif" style="display:flex;justify-content:center;align-items:flex-start;line-height:1;margin-top:14px">
 <span style="font-size:300px;line-height:1;letter-spacing:-.05em;padding-bottom:10px">{round(max(f) * 100)}</span><span style="font-size:110px;color:#e4372c;margin-top:.35em;margin-left:8px">%</span></div>
 <div style="text-align:center;font-size:24px;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-top:6px">{esc(win)}</div>
@@ -1658,6 +1658,49 @@ def league_cards(shown, now):
         send_album(pngs, f"🃏 <b>Os jogos de hoje</b> ({len(pngs)} cartões, um por liga)")
         return True
     return False
+
+
+EQUIPA_FAVORITA = os.getenv("EQUIPA_FAVORITA", "").strip()
+
+
+def is_fav(team):
+    """True se 'team' é a equipa favorita (variável EQUIPA_FAVORITA, ex.: 'Benfica')."""
+    if not EQUIPA_FAVORITA:
+        return False
+    a = re.sub(r"[^a-z0-9 ]", "", EQUIPA_FAVORITA.lower())
+    for n in (team, short_name(team)):
+        b = re.sub(r"[^a-z0-9 ]", "", n.lower())
+        if a and (a in b or b in a):
+            return True
+    return False
+
+
+def fav_card(shown, now):
+    """Cartão 'A tua equipa joga hoje' (só se EQUIPA_FAVORITA estiver definida e a equipa jogar)."""
+    for league, games in shown.items():
+        for g in games:
+            if g.get("final") and (is_fav(g["home"]) or is_fav(g["away"])) and parse_iso(g["time"]) > now:
+                return send_card(cover_html(g, now, tag="A tua equipa joga hoje"), "⭐ <b>A tua equipa joga hoje</b>")
+    return False
+
+
+def goal_card_html(r, st, tm, player, who, prev, swing, pen=""):
+    h, a = short_name(r["casa"]), short_name(r["fora"])
+    star = ' <span style="color:#e4372c">★</span>' if (is_fav(who)) else ""
+    def row(name, p0, p1):
+        d = round((p1 - p0) * 100)
+        c = "#1f7a45" if d > 0 else ("#e4372c" if d < 0 else "#6a6558")
+        return (f'<div style="display:flex;align-items:baseline;justify-content:space-between;padding:14px 0;border-bottom:2px solid rgba(20,18,16,.2)">'
+                f'<span class="serif" style="font-size:44px">{esc(name)}</span>'
+                f'<span style="font-size:34px;font-weight:900">{round(p0 * 100)}% → {round(p1 * 100)}% <span style="color:{c};font-size:28px">{d:+d}</span></span></div>')
+    return (CARD_HEAD + f"""<div class="top"><span>Ao vivo · {esc(str(tm))}'</span><span>Golo</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>
+<div style="text-align:center;margin-top:26px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:26px;letter-spacing:.3em;padding:10px 26px">GOLO!</span></div>
+<div class="serif" style="text-align:center;font-size:250px;line-height:1.05;letter-spacing:-.04em;margin-top:6px">{st['gh']}–{st['ga']}</div>
+<div class="serif" style="text-align:center;font-size:52px;line-height:1.1;margin-top:4px">{esc(h)} <i style="color:#e4372c">contra</i> {esc(a)}</div>
+<div style="text-align:center;font-size:32px;font-weight:900;margin-top:18px">{esc(player)} · {esc(short_name(who))}{esc(pen)}{star}</div>
+<div style="padding:22px 56px 0">{row(h, prev[0], swing[0])}{row(a, prev[2], swing[2])}</div>
+<div class="foot"><span>Probabilidade ao vivo</span><b>●</b><span>Radar do Golo</span></div></body></html>""")
 
 
 def gemini_card_html(summary, news, now):
@@ -2336,7 +2379,7 @@ def read_voters(poll_id):
         if a and a.get("poll_id") == poll_id and a.get("user"):
             usr = a["user"]
             if a.get("option_ids"):
-                out[usr["id"]] = (usr.get("first_name") or "?", a["option_ids"][0])
+                out[usr["id"]] = ((f"Jogador {str(usr['id'])[-3:]}" if os.getenv("GRUPO_ANONIMO") else (usr.get("first_name") or "?")), a["option_ids"][0])
             else:
                 out.pop(usr["id"], None)  # retirou o voto
     return out
@@ -2682,6 +2725,11 @@ def live_mode(now):
                 ev_lines.append(f"⚽ {tm}' {esc(player)} ({esc(short_name(who))}){pen}")
                 swings.append((abs(swing[0] - prev[0]) + abs(swing[2] - prev[2]), tm, player, who, prev, swing))
                 try:
+                    if send_card(goal_card_html(r, st, tm, player, who, prev, swing, pen), f"⚽ <b>GOLO!</b> {esc(short_name(r['casa']))} {st['gh']}–{st['ga']} {esc(short_name(r['fora']))}"):
+                        continue
+                except Exception as e:  # noqa: BLE001
+                    print("Cartão de golo falhou:", e, file=sys.stderr)
+                try:
                     tg_send(f"⚽ <b>GOLO! {esc(r['casa'])} {st['gh']}–{st['ga']} {esc(r['fora'])}</b> · {tm}'\n"
                             f"{esc(player)} ({esc(short_name(who))}){pen}\n"
                             f"{esc(short_name(r['casa']))}: {prev[0]:.0%} → {swing[0]:.0%} · {esc(short_name(r['fora']))}: {prev[2]:.0%} → {swing[2]:.0%}")
@@ -2913,6 +2961,7 @@ def main(now=None):
                     weekly_done = True
             except Exception as e:  # noqa: BLE001
                 print("Cartão semanal falhou:", e, file=sys.stderr)
+        fav_card(shown, now)                  # a tua equipa joga hoje (se EQUIPA_FAVORITA)
         gemini_card(summary, news, now)       # cartão da IA (leitura do dia + notícias)
     except Exception as e:  # noqa: BLE001
         print("Cartões da manhã falharam:", e, file=sys.stderr)
