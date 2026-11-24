@@ -1660,33 +1660,9 @@ def league_cards(shown, now):
     return False
 
 
-EQUIPA_FAVORITA = os.getenv("EQUIPA_FAVORITA", "").strip()
-
-
-def is_fav(team):
-    """True se 'team' é a equipa favorita (variável EQUIPA_FAVORITA, ex.: 'Benfica')."""
-    if not EQUIPA_FAVORITA:
-        return False
-    a = re.sub(r"[^a-z0-9 ]", "", EQUIPA_FAVORITA.lower())
-    for n in (team, short_name(team)):
-        b = re.sub(r"[^a-z0-9 ]", "", n.lower())
-        if a and (a in b or b in a):
-            return True
-    return False
-
-
-def fav_card(shown, now):
-    """Cartão 'A tua equipa joga hoje' (só se EQUIPA_FAVORITA estiver definida e a equipa jogar)."""
-    for league, games in shown.items():
-        for g in games:
-            if g.get("final") and (is_fav(g["home"]) or is_fav(g["away"])) and parse_iso(g["time"]) > now:
-                return send_card(cover_html(g, now, tag="A tua equipa joga hoje"), "⭐ <b>A tua equipa joga hoje</b>")
-    return False
-
-
 def goal_card_html(r, st, tm, player, who, prev, swing, pen=""):
     h, a = short_name(r["casa"]), short_name(r["fora"])
-    star = ' <span style="color:#e4372c">★</span>' if (is_fav(who)) else ""
+    star = ""
     def row(name, p0, p1):
         d = round((p1 - p0) * 100)
         c = "#1f7a45" if d > 0 else ("#e4372c" if d < 0 else "#6a6558")
@@ -2961,7 +2937,6 @@ def main(now=None):
                     weekly_done = True
             except Exception as e:  # noqa: BLE001
                 print("Cartão semanal falhou:", e, file=sys.stderr)
-        fav_card(shown, now)                  # a tua equipa joga hoje (se EQUIPA_FAVORITA)
         gemini_card(summary, news, now)       # cartão da IA (leitura do dia + notícias)
     except Exception as e:  # noqa: BLE001
         print("Cartões da manhã falharam:", e, file=sys.stderr)
