@@ -1968,8 +1968,25 @@ def af_lineup(fixture_id):
     return out
 
 
+_PART = {"de", "da", "do", "dos", "das", "van", "von", "der", "den", "ter", "el", "al", "di", "le", "la", "mac", "mc"}
+_SUF = {"jr", "jr.", "júnior", "junior", "filho", "neto", "sobrinho"}
+
+
+def player_name(n):
+    """Nome curto e reconhecível: 'Vinícius Júnior' -> 'Vinícius Jr.', 'Marcos Paulo da Silva' -> 'da Silva'."""
+    t = n.split()
+    if len(t) <= 1:
+        return n.strip()
+    if t[-1].lower() in _SUF:
+        return f"{t[-2]} Jr."
+    i = len(t) - 1
+    while i > 0 and t[i - 1].lower() in _PART:
+        i -= 1
+    return " ".join(t[i:])
+
+
 def onze_line(side_icon, team, lu, prev_ids):
-    names = ", ".join(esc(n.split()[-1]) for _, n in lu["xi"])
+    names = ", ".join(esc(player_name(n)) for _, n in lu["xi"])
     form = f" ({lu['formacao']})" if lu["formacao"] else ""
     line = f"{side_icon} <b>{esc(team)}</b>{form}\n{names}"
     if prev_ids:
@@ -1986,7 +2003,7 @@ def onze_card_html(r, lh, la, prev_h, prev_a):
         rot = ""
         if ch is not None:
             rot = f'<div style="margin-top:14px;font-size:22px;font-weight:900;color:{"#e4372c" if ch >= ONZE_ROTATION else "#6a6558"}">🔄 {ch} mudança(s){" · muita rotação" if ch >= ONZE_ROTATION else ""}</div>'
-        names = "".join(f'<div style="font-size:30px;line-height:1.28">{esc(n.split()[-1])}</div>' for _, n in lu["xi"])
+        names = "".join(f'<div style="font-size:30px;line-height:1.28">{esc(player_name(n))}</div>' for _, n in lu["xi"])
         return (f'<div style="flex:1;padding:0 28px"><div class="serif" style="font-size:40px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{esc(short_name(team))}</div>'
                 f'<div style="font-size:22px;font-weight:900;letter-spacing:.16em;color:{colr};margin:6px 0 12px">{esc(lu.get("formacao") or "")}</div>{names}{rot}</div>')
     t = parse_iso(r["inicio_utc"]).astimezone(LISBON)
