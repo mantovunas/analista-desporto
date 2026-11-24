@@ -33,6 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - run: pip install playwright || true   # cartões em imagem; se falhar, o bot envia só texto
       - run: python bot.py
         env:
           MODO: ${{ github.event.inputs.modo }}
