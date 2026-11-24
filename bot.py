@@ -1397,6 +1397,258 @@ def telegram(blocks):
         r.raise_for_status()
 
 
+# ---------- cartões em imagem (estilo "Revista" do site) ----------
+CARD_HEAD = """<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,800;1,800&family=Archivo:wght@500;700;900&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box}body{margin:0;width:1080px;height:1080px;background:#f1ede4;color:#141210;font-family:Archivo,Arial,sans-serif;
+position:relative;overflow:hidden}.serif{font-family:'Playfair Display',Georgia,serif;font-weight:800;font-variant-numeric:lining-nums;font-feature-settings:'liga' 0,'lnum' 1}
+.top{display:flex;justify-content:space-between;padding:34px 56px 0;font-size:22px;font-weight:900;letter-spacing:.2em;text-transform:uppercase}
+.mast{margin:8px 0 0;border-top:6px solid #141210;border-bottom:6px solid #141210;text-align:center;font-size:118px;line-height:1.1;padding:0 0 8px;letter-spacing:-.04em}
+.foot{position:absolute;left:0;right:0;bottom:0;height:70px;background:#141210;color:#f1ede4;display:flex;align-items:center;justify-content:center;gap:40px;font-weight:900;font-size:22px;letter-spacing:.16em;text-transform:uppercase}
+.foot b{color:#e4372c}</style></head><body>"""
+
+
+def _card_date(now):
+    d = now.astimezone(LISBON)
+    return f"{DIAS[d.weekday()]}, {d:%d/%m/%Y}"
+
+
+def cover_html(g, now, extra=""):
+    f = g["final"]
+    i = f.index(max(f))
+    win = f"{short_name(g['home'])} ganha" if i == 0 else f"{short_name(g['away'])} ganha" if i == 2 else "Empate"
+    t = parse_iso(g["time"]).astimezone(LISBON)
+    likely = ""
+    try:
+        (ci, cj), _ = top_scores(g["p"]["lh"], g["p"]["la"], 1)[0]
+        likely = (f'<div style="text-align:center;margin-top:34px"><div style="font-size:20px;font-weight:900;letter-spacing:.2em;color:#6a6558">RESULTADO MAIS PROVÁVEL</div>'
+                  f'<div class="serif" style="font-size:96px;line-height:1.1">{ci}–{cj}</div></div>')
+    except Exception:  # noqa: BLE001
+        pass
+    return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>Edição de hoje</span></div>
+<div class="mast serif">Radar do Golo</div>
+<div style="text-align:center;margin-top:30px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">O jogo do dia · {t:%H:%M}</span></div>
+<div class="serif" style="display:flex;justify-content:center;align-items:flex-start;line-height:1;margin-top:14px">
+<span style="font-size:300px;line-height:1;letter-spacing:-.05em;padding-bottom:10px">{round(max(f) * 100)}</span><span style="font-size:110px;color:#e4372c;margin-top:.35em;margin-left:8px">%</span></div>
+<div style="text-align:center;font-size:24px;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-top:6px">{esc(win)}</div>
+<div class="serif" style="text-align:center;font-size:66px;line-height:1.15;margin-top:22px">{esc(short_name(g['home']))} <i style="color:#e4372c">contra</i> {esc(short_name(g['away']))}</div>
+<div style="width:760px;height:24px;margin:26px auto 0;display:flex;background:#d8d3c7"><div style="width:{f[0] * 100:.1f}%;background:#141210"></div><div style="width:{f[1] * 100:.1f}%;background:#e4372c"></div><div style="width:{f[2] * 100:.1f}%;background:#8d877a"></div></div>
+<div style="width:760px;margin:12px auto 0;display:flex;justify-content:space-between;font-size:22px;font-weight:900;letter-spacing:.1em;text-transform:uppercase"><span>Casa {round(f[0] * 100)}</span><span style="color:#e4372c">Empate {round(f[1] * 100)}</span><span style="color:#6a6558">Fora {round(f[2] * 100)}</span></div>
+{likely}
+<div class="foot"><span>Vota na sondagem do dia</span>{extra}</div></body></html>""")
+
+
+def night_html(done, now, extra=""):
+    names = ("casa", "empate", "fora")
+    rows, hit, n = [], 0, 0
+    for r in done[:8]:
+        fp = _final_probs(r)
+        ok = None
+        if fp:
+            ok = fp.index(max(fp)) == _result_idx(r)
+            hit += int(ok)
+            n += 1
+        mark = "" if ok is None else ('<b style="color:#1f7a45">ACERTOU</b>' if ok else '<b style="color:#e4372c">FALHOU</b>')
+        rows.append(f'<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid rgba(20,18,16,.2);padding:14px 0">'
+                    f'<span class="serif" style="font-size:38px;max-width:700px">{esc(short_name(r["casa"]))} {esc(r["golos_casa"])}–{esc(r["golos_fora"])} {esc(short_name(r["fora"]))}</span>'
+                    f'<span style="font-size:20px;letter-spacing:.14em">{mark}</span></div>')
+    head = f'<span class="serif" style="font-size:210px;line-height:1">{hit}</span><span class="serif" style="font-size:90px;color:#e4372c;margin-top:.3em">/{n}</span>' if n else ""
+    return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>Resultados de hoje</span></div>
+<div class="mast serif">Radar do Golo</div>
+<div style="text-align:center;margin-top:24px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">O bot acertou</span></div>
+<div style="display:flex;justify-content:center;align-items:flex-start;margin-top:8px">{head}</div>
+<div style="padding:10px 56px 0">{''.join(rows)}</div>
+<div class="foot"><span>Radar do Golo</span>{extra}</div></body></html>""")
+
+
+def render_card(html):
+    """HTML -> PNG (1080x1080) com o Chrome do GitHub Actions. Devolve bytes ou None se não for possível."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:  # noqa: BLE001
+        print("Cartão: playwright não instalado, envio só texto:", e, file=sys.stderr)
+        return None
+    try:
+        with sync_playwright() as p:
+            try:
+                br = p.chromium.launch(channel="chrome", args=["--no-sandbox"])
+            except Exception:  # noqa: BLE001
+                br = p.chromium.launch(args=["--no-sandbox"])
+            pg = br.new_page(viewport={"width": 1080, "height": 1080})
+            pg.set_content(html)
+            try:
+                pg.wait_for_load_state("networkidle", timeout=15000)
+                pg.evaluate("document.fonts.ready")
+            except Exception:  # noqa: BLE001
+                pass
+            png = pg.screenshot(type="png")
+            br.close()
+            return png
+    except Exception as e:  # noqa: BLE001
+        print("Cartão: falhou a gerar a imagem, envio só texto:", e, file=sys.stderr)
+        return None
+
+
+def send_card(html, caption=""):
+    png = render_card(html)
+    if not png:
+        return False
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
+                          data={"chat_id": TG_CHAT, "caption": caption[:1000], "parse_mode": "HTML"},
+                          files={"photo": ("radar.png", png, "image/png")}, timeout=60)
+        r.raise_for_status()
+        return True
+    except Exception as e:  # noqa: BLE001
+        print("Cartão: envio falhou:", e, file=sys.stderr)
+        return False
+
+
+def game_card_html(league, g, now):
+    f = g["final"]
+    i = f.index(max(f))
+    t = parse_iso(g["time"]).astimezone(LISBON)
+    cells = []
+    for k, (lab, name) in enumerate((("Casa", short_name(g["home"])), ("Empate", ""), ("Fora", short_name(g["away"])))):
+        on = k == i
+        col = "#141210" if k == 0 else "#e4372c" if k == 1 else "#6a6558"
+        cells.append(f'<div style="flex:1;text-align:center;{"" if on else "opacity:.55"}"><div class="serif" style="font-size:{170 if on else 120}px;line-height:1;color:{col}">{round(f[k] * 100)}</div>'
+                     f'<div style="font-size:20px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;margin-top:4px">{lab}</div></div>')
+    chips = []
+    if not g.get("market_only") and g.get("p"):
+        try:
+            (ci, cj), _ = top_scores(g["p"]["lh"], g["p"]["la"], 1)[0]
+            chips.append(f"Resultado provável {ci}–{cj}")
+        except Exception:  # noqa: BLE001
+            pass
+        if g.get("final_o") is not None:
+            chips.append(f"+2,5 golos {g['final_o']:.0%}")
+        chips.append("Confiança " + re.sub(r"^[^\w]+", "", re.sub(r"<[^>]+>", "", conf_txt(g["conf"]))).strip())
+    else:
+        chips.append("Só mercado")
+    chips.append("Betclic ✓" if g.get("has_pref") else "sem Betclic")
+    warn = ""
+    if g.get("spread_warn") or g.get("inj_warn"):
+        warn = '<div style="text-align:center;margin-top:18px;font-size:22px;font-weight:900;letter-spacing:.14em;color:#e4372c;text-transform:uppercase">Jogo de risco: o bot está menos seguro</div>'
+    chip_html = "".join(f'<span style="border:3px solid #141210;padding:8px 14px;font-size:20px;font-weight:900;letter-spacing:.08em;text-transform:uppercase">{esc(c)}</span>' for c in chips if c)
+    return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>{esc(league)}</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>
+<div style="text-align:center;margin-top:26px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">{t:%H:%M}</span></div>
+<div class="serif" style="text-align:center;font-size:72px;line-height:1.12;margin:26px 40px 0">{esc(short_name(g['home']))}<br><i style="color:#e4372c;font-size:54px">contra</i><br>{esc(short_name(g['away']))}</div>
+<div style="display:flex;margin:34px 56px 0;align-items:flex-end">{''.join(cells)}</div>
+<div style="width:900px;height:22px;margin:22px auto 0;display:flex;background:#d8d3c7"><div style="width:{f[0] * 100:.1f}%;background:#141210"></div><div style="width:{f[1] * 100:.1f}%;background:#e4372c"></div><div style="width:{f[2] * 100:.1f}%;background:#8d877a"></div></div>
+<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:26px 40px 0">{chip_html}</div>{warn}
+<div class="foot"><span>Radar do Golo</span><b>●</b><span>Estimativa, não garantia</span></div></body></html>""")
+
+
+def render_cards(htmls):
+    """Vários HTML -> vários PNG com um único browser (mais rápido). Lista vazia se não der."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:  # noqa: BLE001
+        print("Cartões: playwright não instalado:", e, file=sys.stderr)
+        return []
+    out = []
+    try:
+        with sync_playwright() as p:
+            try:
+                br = p.chromium.launch(channel="chrome", args=["--no-sandbox"])
+            except Exception:  # noqa: BLE001
+                br = p.chromium.launch(args=["--no-sandbox"])
+            pg = br.new_page(viewport={"width": 1080, "height": 1080})
+            for h in htmls:
+                pg.set_content(h)
+                try:
+                    pg.wait_for_load_state("networkidle", timeout=15000)
+                    pg.evaluate("document.fonts.ready")
+                except Exception:  # noqa: BLE001
+                    pass
+                out.append(pg.screenshot(type="png"))
+            br.close()
+    except Exception as e:  # noqa: BLE001
+        print("Cartões: falhou a gerar imagens:", e, file=sys.stderr)
+    return out
+
+
+def send_album(pngs, caption=""):
+    for a in range(0, len(pngs), 10):
+        chunk = pngs[a:a + 10]
+        if len(chunk) == 1:
+            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto", data={"chat_id": TG_CHAT, "caption": caption[:900] if a == 0 else "", "parse_mode": "HTML"},
+                          files={"photo": ("j0.png", chunk[0], "image/png")}, timeout=60).raise_for_status()
+            continue
+        media = [{"type": "photo", "media": f"attach://p{k}"} for k in range(len(chunk))]
+        if a == 0 and caption:
+            media[0]["caption"] = caption[:900]
+            media[0]["parse_mode"] = "HTML"
+        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMediaGroup",
+                      data={"chat_id": TG_CHAT, "media": json.dumps(media)},
+                      files={f"p{k}": (f"j{k}.png", b, "image/png") for k, b in enumerate(chunk)}, timeout=120).raise_for_status()
+
+
+ROWS_PER_CARD = 7
+
+
+def league_card_html(league, games, now, part=1, parts=1):
+    rows = []
+    for g in games:
+        f = g["final"]
+        i = f.index(max(f))
+        t = parse_iso(g["time"]).astimezone(LISBON)
+        cols = ("#141210", "#e4372c", "#6a6558")
+        nums = "".join(f'<span style="display:inline-block;width:78px;text-align:right;font-weight:{900 if k == i else 500};font-size:{40 if k == i else 32}px;color:{cols[k]};opacity:{1 if k == i else .6}">{round(f[k] * 100)}</span>' for k in range(3))
+        risk = ' <b style="color:#e4372c">!</b>' if (g.get("spread_warn") or g.get("inj_warn")) else ""
+        rows.append(f"""<div style="padding:12px 0 10px;border-bottom:2px solid rgba(20,18,16,.2)">
+<div style="display:flex;align-items:baseline;gap:18px"><span style="font-size:24px;font-weight:900;letter-spacing:.08em;width:84px">{t:%H:%M}</span>
+<span class="serif" style="font-size:36px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{esc(short_name(g['home']))} <i style="color:#e4372c;font-size:28px">vs</i> {esc(short_name(g['away']))}{risk}</span>
+<span class="serif">{nums}</span></div>
+<div style="display:flex;height:12px;margin:8px 0 0 102px;background:#d8d3c7"><div style="width:{f[0] * 100:.1f}%;background:#141210"></div><div style="width:{f[1] * 100:.1f}%;background:#e4372c"></div><div style="width:{f[2] * 100:.1f}%;background:#8d877a"></div></div></div>""")
+    sub = f"{league}" + (f" · {part}/{parts}" if parts > 1 else "")
+    return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>Os jogos de hoje</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>
+<div style="text-align:center;margin-top:20px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:24px;letter-spacing:.22em;padding:10px 22px;text-transform:uppercase">{esc(sub)}</span></div>
+<div style="display:flex;justify-content:flex-end;gap:0;padding:14px 56px 0;font-size:16px;font-weight:900;letter-spacing:.12em;text-transform:uppercase"><span style="width:78px;text-align:right">Casa</span><span style="width:78px;text-align:right">Emp.</span><span style="width:78px;text-align:right">Fora</span></div>
+<div style="padding:0 56px">{''.join(rows)}</div>
+<div class="foot"><span>Radar do Golo</span><b>●</b><span>! = jogo de risco</span></div></body></html>""")
+
+
+def league_cards(shown, now):
+    """Um (ou mais) cartão(ões) por liga, com todos os jogos dessa liga, enviados como álbum."""
+    htmls = []
+    for league, games in shown.items():
+        gs = sorted((g for g in games if g.get("final")), key=lambda g: g["time"])
+        if not gs:
+            continue
+        parts = [gs[i:i + ROWS_PER_CARD] for i in range(0, len(gs), ROWS_PER_CARD)]
+        for n, part in enumerate(parts, 1):
+            htmls.append(league_card_html(league, part, now, n, len(parts)))
+    htmls = htmls[:10]
+    if not htmls:
+        return
+    pngs = render_cards(htmls)
+    if pngs:
+        send_album(pngs, f"🃏 <b>Os jogos de hoje</b> ({len(pngs)} cartões, um por liga)")
+
+
+def morning_card(shown, now):
+    cands = []
+    for league, games in shown.items():
+        for g in games:
+            if g.get("final") and parse_iso(g["time"]) > now:
+                cands.append((fame_score(league, g), g))
+    if not cands:
+        return
+    g = max(cands, key=lambda x: x[0])[1]
+    yl = ""
+    try:
+        yl = yesterday_line(read_csv(PREDS_FILE), now)
+    except Exception:  # noqa: BLE001
+        pass
+    extra = f"<b>●</b><span>{esc(re.sub(r'^\S+\s+', '', yl))}</span>" if yl else ""
+    send_card(cover_html(g, now, extra), f"🎯 <b>O jogo do dia</b> — mais detalhes na mensagem seguinte")
+    return g
+
+
 # ---------- simulador da época ----------
 SIM_LEAGUES = {  # código: (nº de lugares "Champions", nº de lugares de descida)
     "PL": (4, 3), "PD": (4, 3), "SA": (4, 3), "BL1": (4, 2), "FL1": (3, 2), "PPL": (2, 2),
@@ -1655,6 +1907,12 @@ def results_night(now):
     except Exception as e:  # noqa: BLE001
         print("Bot contra o grupo falhou:", e, file=sys.stderr)
     blocks.append("— <b>Radar do Golo</b> 🎯")
+    try:
+        sl2 = streak_line(preds_h)
+        if done:
+            send_card(night_html(done, now, f"<b>●</b><span>{esc(re.sub(r'^\S+\s+', '', sl2))}</span>" if sl2 else ""), "🌙 <b>Resultados de hoje</b>")
+    except Exception as e:  # noqa: BLE001
+        print("Cartão da noite falhou:", e, file=sys.stderr)
     telegram(blocks)
 
 
@@ -2539,6 +2797,11 @@ def main(now=None):
             write_csv(f"{HIST_DIR}/equipas.csv", ["liga", "equipa"], [{"liga": l, "equipa": t} for l, ts in teams_seen.items() for t in ts])
     except Exception as e:  # noqa: BLE001
         print("equipas.csv falhou:", e, file=sys.stderr)
+    try:
+        league_cards(shown, now)   # primeiro todas as ligas...
+        morning_card(shown, now)   # ...e no fim o jogo do dia
+    except Exception as e:  # noqa: BLE001
+        print("Cartões da manhã falharam:", e, file=sys.stderr)
     telegram(blocks)
     mark_sent(now)
     try:
