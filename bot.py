@@ -1624,10 +1624,35 @@ def league_cards(shown, now):
             htmls.append(league_card_html(league, part, now, n, len(parts)))
     htmls = htmls[:10]
     if not htmls:
-        return
+        return False
     pngs = render_cards(htmls)
     if pngs:
         send_album(pngs, f"🃏 <b>Os jogos de hoje</b> ({len(pngs)} cartões, um por liga)")
+        return True
+    return False
+
+
+def gemini_card_html(summary, news, now):
+    """Cartão com a 'Leitura do dia' e as notícias do Gemini (só texto já gerado, sem mexer em probabilidades)."""
+    def body(block):
+        return esc(re.sub(r"<[^>]+>", "", block.split("\n", 1)[1] if "\n" in block else block).replace("Não influencia as probabilidades; confirma sempre.", "").strip())
+    secs = []
+    if summary:
+        secs.append(("A leitura do dia", body(summary), 30 if len(summary) < 700 else 25))
+    if news:
+        secs.append(("Notícias dos jogos · experimental", body(news), 24))
+    html = "".join(f'<div style="padding:0 56px;margin-top:30px"><div style="font-size:20px;font-weight:900;letter-spacing:.2em;color:#e4372c;text-transform:uppercase;border-bottom:3px solid #141210;padding-bottom:8px">{t}</div>'
+                   f'<div style="font-size:{fs}px;line-height:1.35;margin-top:14px;white-space:pre-line">{b}</div></div>' for t, b, fs in secs)
+    return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>Inteligência artificial</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>{html}
+<div style="position:absolute;left:56px;right:56px;bottom:90px;font-size:18px;color:#6a6558">Não influencia as probabilidades; confirma sempre.</div>
+<div class="foot"><span>Radar do Golo</span><b>●</b><span>Gemini</span></div></body></html>""")
+
+
+def gemini_card(summary, news, now):
+    if not (summary or news):
+        return False
+    return send_card(gemini_card_html(summary, news, now), "🧠 <b>O que a IA lê do dia</b>")
 
 
 def morning_card(shown, now):
@@ -1645,7 +1670,7 @@ def morning_card(shown, now):
     except Exception:  # noqa: BLE001
         pass
     extra = f"<b>●</b><span>{esc(re.sub(r'^\S+\s+', '', yl))}</span>" if yl else ""
-    send_card(cover_html(g, now, extra), f"🎯 <b>O jogo do dia</b> — mais detalhes na mensagem seguinte")
+    send_card(cover_html(g, now, extra), f"🎯 <b>O jogo do dia</b>")
     return g
 
 
@@ -2782,6 +2807,7 @@ def main(now=None):
     summary = gemini_summary(plain_text(blocks))
     if summary:
         blocks.insert(2, summary)  # logo a seguir ao resumo do topo
+    news = ""
     try:
         news = gemini_news(shown)
         if news:
@@ -2797,12 +2823,15 @@ def main(now=None):
             write_csv(f"{HIST_DIR}/equipas.csv", ["liga", "equipa"], [{"liga": l, "equipa": t} for l, ts in teams_seen.items() for t in ts])
     except Exception as e:  # noqa: BLE001
         print("equipas.csv falhou:", e, file=sys.stderr)
+    cards_ok = False
     try:
-        league_cards(shown, now)   # primeiro todas as ligas...
-        morning_card(shown, now)   # ...e no fim o jogo do dia
+        cards_ok = league_cards(shown, now)   # primeiro todas as ligas...
+        morning_card(shown, now)              # ...e no fim o jogo do dia
+        gemini_card(summary, news, now)       # cartão da IA (leitura do dia + notícias)
     except Exception as e:  # noqa: BLE001
         print("Cartões da manhã falharam:", e, file=sys.stderr)
-    telegram(blocks)
+    if not cards_ok or os.getenv("TEXTO_TAMBEM"):   # com cartões enviados, o texto fica só como reserva
+        telegram(blocks)
     mark_sent(now)
     try:
         send_poll(shown, now)
