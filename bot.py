@@ -1924,21 +1924,30 @@ def results_night(now):
         if sl:
             sm.append(sl)
         blocks.append("\n".join(sm))
+    hist = []
     if newly:
-        blocks.append(history_blocks(picks_h, preds_h, newly)[0])
+        hist = [history_blocks(picks_h, preds_h, newly)[0]]
+        blocks.extend(hist)
+    duel = []
     try:
-        blocks.extend(group_duel(done, now))
-        blocks.extend(exact_duel(done, now))
+        duel.extend(group_duel(done, now))
+        duel.extend(exact_duel(done, now))
     except Exception as e:  # noqa: BLE001
         print("Bot contra o grupo falhou:", e, file=sys.stderr)
+    blocks.extend(duel)
     blocks.append("— <b>Radar do Golo</b> 🎯")
+    card_ok = False
     try:
         sl2 = streak_line(preds_h)
         if done:
-            send_card(night_html(done, now, f"<b>●</b><span>{esc(re.sub(r'^\S+\s+', '', sl2))}</span>" if sl2 else ""), "🌙 <b>Resultados de hoje</b>")
+            card_ok = send_card(night_html(done, now, f"<b>●</b><span>{esc(re.sub(r'^\S+\s+', '', sl2))}</span>" if sl2 else ""), "🌙 <b>Resultados de hoje</b>")
     except Exception as e:  # noqa: BLE001
         print("Cartão da noite falhou:", e, file=sys.stderr)
-    telegram(blocks)
+    if card_ok and not os.getenv("TEXTO_TAMBEM"):
+        if hist or duel:   # o cartão já mostra os resultados; segue só o texto da banca/duelos
+            telegram(hist + duel)
+    else:
+        telegram(blocks)
 
 
 # ---------- onzes iniciais (modo "onze") ----------
