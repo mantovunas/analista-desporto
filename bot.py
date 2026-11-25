@@ -1651,7 +1651,9 @@ def league_cards(shown, now):
         gs = sorted((g for g in games if g.get("final")), key=lambda g: g["time"])
         if not gs:
             continue
-        parts = [gs[i:i + ROWS_PER_CARD] for i in range(0, len(gs), ROWS_PER_CARD)]
+        k = -(-len(gs) // ROWS_PER_CARD)          # nº de cartões
+        size = -(-len(gs) // k)                  # divide por igual (9 jogos -> 5+4, não 7+2)
+        parts = [gs[i:i + size] for i in range(0, len(gs), size)]
         for n, part in enumerate(parts, 1):
             htmls.append(league_card_html(league, part, now, n, len(parts)))
     htmls = htmls[:10]
