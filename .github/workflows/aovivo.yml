@@ -24,6 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - run: pip install playwright || true   # cartões de golo em imagem; se falhar, vai texto
       - run: python bot.py
         env:
           MODO: aovivo
