@@ -1469,7 +1469,8 @@ def cover_html(g, now, extra="", tag="O jogo do dia"):
 def night_html(done, now, extra=""):
     names = ("casa", "empate", "fora")
     rows, hit, n = [], 0, 0
-    for r in done[:8]:
+    fs, pd = (34, 10) if len(done) <= 8 else (28, 6)
+    for k, r in enumerate(done):
         fp = _final_probs(r)
         ok = None
         if fp:
@@ -1477,15 +1478,18 @@ def night_html(done, now, extra=""):
             hit += int(ok)
             n += 1
         mark = "" if ok is None else ('<b style="color:#1f7a45">ACERTOU</b>' if ok else '<b style="color:#e4372c">FALHOU</b>')
-        rows.append(f'<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid rgba(20,18,16,.2);padding:14px 0">'
-                    f'<span class="serif" style="font-size:38px;max-width:700px">{esc(short_name(r["casa"]))} {esc(r["golos_casa"])}–{esc(r["golos_fora"])} {esc(short_name(r["fora"]))}</span>'
+        if k >= 11:
+            continue
+        rows.append(f'<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid rgba(20,18,16,.2);padding:{pd}px 0">'
+                    f'<span class="serif" style="font-size:{fs}px;max-width:760px">{esc(short_name(r["casa"]))} {esc(r["golos_casa"])}–{esc(r["golos_fora"])} {esc(short_name(r["fora"]))}</span>'
                     f'<span style="font-size:20px;letter-spacing:.14em">{mark}</span></div>')
-    head = f'<span class="serif" style="font-size:210px;line-height:1">{hit}</span><span class="serif" style="font-size:90px;color:#e4372c;margin-top:.3em">/{n}</span>' if n else ""
+    more = f'<div style="padding-top:8px;font-size:20px;font-weight:900;letter-spacing:.14em;color:#6a6558">+ {len(done) - 11} JOGOS</div>' if len(done) > 11 else ""
+    head = f'<span class="serif" style="font-size:150px;line-height:1">{hit}</span><span class="serif" style="font-size:70px;color:#e4372c;margin-top:.25em">/{n}</span>' if n else ""
     return (CARD_HEAD + f"""<div class="top"><span>{esc(_card_date(now))}</span><span>Resultados de hoje</span></div>
-<div class="mast serif">Radar do Golo</div>
-<div style="text-align:center;margin-top:24px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">O bot acertou</span></div>
+<div class="mast serif" style="font-size:84px">Radar do Golo</div>
+<div style="text-align:center;margin-top:18px"><span style="background:#e4372c;color:#fff;font-weight:900;font-size:22px;letter-spacing:.22em;padding:10px 20px;text-transform:uppercase">O bot acertou</span></div>
 <div style="display:flex;justify-content:center;align-items:flex-start;margin-top:8px">{head}</div>
-<div style="padding:10px 56px 0">{''.join(rows)}</div>
+<div style="padding:6px 56px 0">{''.join(rows)}{more}</div>
 <div class="foot"><span>Radar do Golo</span>{extra}</div></body></html>""")
 
 
