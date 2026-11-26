@@ -1,4 +1,5 @@
 liga,data,casa,fora,golos_casa,golos_fora,estado
+Brasileirão,2026-11-25T23:00:00Z,CA Mineiro,SC Corinthians Paulista,1,1,terminado
 Brasileirão,2026-11-24T21:00:00Z,Chapecoense AF,SE Palmeiras,3,0,terminado
 Brasileirão,2026-11-24T00:00:00Z,Santos FC,Grêmio FBPA,0,2,terminado
 Brasileirão,2026-11-23T23:00:00Z,Botafogo FR,São Paulo FC,1,1,terminado
@@ -38,8 +39,6 @@ Brasileirão,2026-10-29T22:30:00Z,CA Mineiro,Cruzeiro EC,0,1,terminado
 Brasileirão,2026-10-29T00:30:00Z,EC Bahia,São Paulo FC,3,2,terminado
 Brasileirão,2026-10-29T00:30:00Z,Clube do Remo,Botafogo FR,2,1,terminado
 Brasileirão,2026-10-28T22:30:00Z,RB Bragantino,Chapecoense AF,3,0,terminado
-Brasileirão,2026-10-28T22:30:00Z,Fluminense FC,SC Internacional,2,1,terminado
-Brasileirão,2026-11-25T23:00:00Z,CA Mineiro,SC Corinthians Paulista,,,agendado
 Brasileirão,2026-11-26T23:00:00Z,São Paulo FC,Clube do Remo,,,agendado
 Brasileirão,2026-11-27T23:00:00Z,Fluminense FC,Cruzeiro EC,,,agendado
 Brasileirão,2026-11-29T00:00:00Z,Botafogo FR,EC Bahia,,,agendado
