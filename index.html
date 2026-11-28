@@ -410,7 +410,62 @@ function goalsStats(R){
 async function loadLive(){
   try{const r=await fetch(base+"aovivo.json?t="+Math.floor(Date.now()/30000));if(!r.ok)return null;return await r.json()}catch(e){return null}
 }
+/* Fonte "ao segundo": o próprio telemóvel pergunta à ESPN (API pública não oficial, sem chave, com CORS) de 30 em 30 s.
+   Dá o minuto do jogo. Se falhar, usa o placar.json que o GitHub grava de 10 em 10 min. */
+const ESPN=[["por.1","Primeira Liga"],["eng.1","Premier League"],["eng.2","Championship"],["esp.1","La Liga"],["ita.1","Serie A"],["ger.1","Bundesliga"],["fra.1","Ligue 1"],["ned.1","Eredivisie"],["bra.1","Brasileirão"],["uefa.champions","Champions League"],["uefa.europa","Liga Europa"]];
+async function loadEspn(){
+  const out=await Promise.allSettled(ESPN.map(async([slug,nome])=>{
+    const r=await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard`);
+    if(!r.ok) throw new Error(r.status);
+    const j=await r.json();
+    return (j.events||[]).map(ev=>{
+      const c=(ev.competitions||[])[0]||{},T=c.competitors||[];
+      const h=T.find(x=>x.homeAway==="home"),a=T.find(x=>x.homeAway==="away"),st=ev.status||{},ty=st.type||{};
+      if(!h||!a) return null;
+      return {liga:nome,casa:h.team.displayName,fora:a.team.displayName,golos_casa:+h.score||0,golos_fora:+a.score||0,
+        estado:ty.state,ht:ty.name==="STATUS_HALFTIME",relogio:st.displayClock||ty.shortDetail||"",inicio_utc:ev.date}
+    }).filter(Boolean);
+  }));
+  const ok=out.filter(o=>o.status==="fulfilled");
+  if(!ok.length) return null;
+  return {fonte:"espn",atualizado:new Date().toISOString(),jogos:ok.flatMap(o=>o.value)};
+}
+async function loadPlacar(){
+  const E=await loadEspn();if(E) return E;
+  try{const r=await fetch(base+"placar.json?t="+Math.floor(Date.now()/60000));if(!r.ok)return null;return await r.json()}catch(e){return null}
+}
+function renderPlacar(PL){
+  if(!PL||!PL.atualizado) return "";
+  const age=Math.round((Date.now()-new Date(PL.atualizado))/60000);
+  const esp=PL.fonte==="espn";
+  const all=(PL.jogos||[]);
+  const J=esp?all.filter(j=>j.estado==="in"):all;
+  const done=esp?all.filter(j=>j.estado==="post"):[];
+  if(age>25||(!J.length&&!done.length)) return "";
+  if(!J.length) return renderTerminados(done);
+  const byL={};J.forEach(j=>{(byL[j.liga]??=[]).push(j)});
+  let x=`<div class="lead" style="padding-bottom:6px"><div class="k"><span style="color:var(--bad)">● Agora a decorrer</span></div><div class="big"><span class="n" style="font-size:clamp(90px,28vw,150px)">${J.length}</span></div><div class="cap">${J.length===1?"jogo":"jogos"} em direto nas ligas que o Radar acompanha</div></div>`;
+  for(const l in byL){
+    x+=`<h2>${esc(l)}</h2><div class="card">`+byL[l].map(j=>{
+      const t=new Date(j.inicio_utc);
+      const st=esp?(j.ht?"Intervalo":`<b style="color:var(--bad)">${esc(j.relogio)}</b>`):(j.estado==="HT"?"Intervalo":"Em jogo");
+      return `<div class="res"><div class="m"><b>${esc(short(j.casa))}</b> <span class="sc">${j.golos_casa}–${j.golos_fora}</span> <b>${esc(short(j.fora))}</b><div class="muted">${st} · começou às ${fmtHour(t)}</div></div></div>`}).join("")+`</div>`;
+  }
+  x+=esp?renderTerminados(done,true):"";
+  x+=`<div class="muted" style="margin:6px 0 14px">${esp?`Fonte: ESPN (não oficial). Atualiza sozinho de 30 em 30 segundos enquanto esta página estiver aberta.`:`Atualizado há ${age<1?"menos de 1":age} min. A lista atualiza de 10 em 10 minutos, por isso pode ter atraso.`}</div>`;
+  return x;
+}
+function renderTerminados(done,inner){
+  if(!done.length) return "";
+  const rows=done.map(j=>`<div class="res"><div class="m"><b>${esc(short(j.casa))}</b> <span class="sc">${j.golos_casa}–${j.golos_fora}</span> <b>${esc(short(j.fora))}</b><div class="muted">${esc(j.liga)} · terminado</div></div></div>`).join("");
+  return `<h2>Terminados hoje</h2><div class="card">${rows}</div>`+(inner?"":`<div class="muted" style="margin:6px 0 14px">Fonte: ESPN (não oficial).</div>`);
+}
 function renderAoVivo(L){
+  const pl=renderPlacar(DATA.PL);
+  if(pl&&!L) return pl;
+  return pl+renderAoVivoMain(L);
+}
+function renderAoVivoMain(L){
   if(!L) return `<div class="lead"><div class="k">Edição especial</div><div class="big"><span class="n" style="font-size:clamp(64px,19vw,120px)">Ao vivo</span></div><div class="cap">Todos os dias o grupo vota no jogo a seguir ao vivo. Quando começar, aparece aqui o resultado e as probabilidades a mudar.</div><div class="cap">Ainda não houve nenhum jogo ao vivo.</div></div>`;
   const nome={NS:"Vai começar",["1H"]:"1.ª parte",HT:"Intervalo",["2H"]:"2.ª parte",ET:"Prolongamento",P:"Penáltis",FT:"Terminado",AET:"Terminado",PEN:"Terminado"}[L.estado]||L.estado;
   const age=Math.round((Date.now()-new Date(L.atualizado))/60000);
@@ -429,7 +484,7 @@ function renderAoVivo(L){
   return x;
 }
 async function refreshLive(){
-  DATA.L=await loadLive();
+  DATA.L=await loadLive();DATA.PL=await loadPlacar();
   const el=document.getElementById("aovivo");if(el) el.innerHTML=renderAoVivo(DATA.L);
   drawTicker();
 }
@@ -687,8 +742,9 @@ document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
 });
 (async()=>{
   const [P,K,S,E,X,G]=await Promise.all([load("previsoes.csv"),load("sugestoes.csv"),load("simulacao.csv"),load("equipas.csv"),load("outras_ligas.csv"),load("duelo_grupo.csv")]);
-  DATA={P,K,S,E,X,G,L:await loadLive()};draw();
+  DATA={P,K,S,E,X,G,L:await loadLive(),PL:await loadPlacar()};draw();
   setInterval(()=>{if(!document.hidden) refreshLive()},60000);
+  setInterval(()=>{const el=document.getElementById("aovivo");if(!document.hidden&&el&&el.offsetParent!==null) refreshLive()},30000);
   updateTeamBtn();
   let visto="";try{visto=localStorage.getItem("radar_visto")||""}catch(e){}
   if(!getTeam()&&!visto) openTeamDialog(true);
