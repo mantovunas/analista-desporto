@@ -34,6 +34,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: pip install playwright || true   # cartões em imagem; se falhar, o bot envia só texto
+      - run: python -m playwright install chromium || true   # reserva: browser próprio para os cartões
       - run: python bot.py
         env:
           MODO: ${{ github.event.inputs.modo }}
