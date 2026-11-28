@@ -339,10 +339,10 @@ const FAMOUS=["benfica","porto","sporting","braga","real madrid","barcelona","at
 const LFAME={"Champions League":6,"Premier League":3,"La Liga":3,"Liga Portugal":3,"Serie A":2,"Bundesliga":2,"Ligue 1":2};
 const nrm=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\b(fc|cf|sc|cd|afc|sad|club|clube|de|ac|rc|rcd|ca|sl|cp|and|1)\b/g," ").replace(/\s+/g," ").trim();
 const sameTeam=(a,b)=>{a=nrm(a);b=nrm(b);return a.length>2&&b.length>2&&(a===b||a.includes(b)||b.includes(a))};
-function heroCard(r){
+function heroCard(r,tag){
   const f=fin(r),k=new Date(r.inicio_utc),i=f.indexOf(Math.max(...f));
   const win=i===0?esc(short(r.casa))+" ganha":i===2?esc(short(r.fora))+" ganha":"Empate";
-  return `<div class="cover"><span class="tag">O jogo do dia · ${esc(r.liga)}</span>
+  return `<div class="cover"><span class="tag">${tag||"O jogo do dia"} · ${esc(r.liga)}</span>
     <div class="big"><span class="n">${Math.round(f[i]*100)}</span><span class="p">%</span></div>
     <div class="win">${win}</div>
     <div class="vs">${esc(short(r.casa))} <i>contra</i> ${esc(short(r.fora))}</div>
@@ -356,13 +356,20 @@ function renderHoje(P){
   const days={};
   up.forEach(r=>{(days[dayKey(new Date(r.inicio_utc))]??=[]).push(r)});
   let h="";
-  const cand=up.filter(r=>fin(r)&&new Date(r.inicio_utc)>new Date(now.getTime()+30*60e3));
+  // "Jogo do dia" = só jogos de HOJE. Se hoje já não há nenhum por começar, usa o próximo dia com jogos e diz que é o próximo.
+  const today=dayKey(now);
+  const sameDay=(r,k)=>dayKey(new Date(r.inicio_utc))===k;
+  let cand=up.filter(r=>fin(r)&&sameDay(r,today)&&new Date(r.inicio_utc)>new Date(now.getTime()+30*60e3));
+  let heroTag="O jogo do dia";
+  if(!cand.length){
+    const nextKey=Object.keys(days).find(k=>k!==today&&days[k].some(r=>fin(r)));
+    if(nextKey){cand=days[nextKey].filter(r=>fin(r));heroTag="Próximo jogo em destaque · "+fmtDay(new Date(cand[0].inicio_utc))}
+  }
   if(cand.length){
     const sc=r=>10*((FAMOUS.some(f=>nrm(r.casa).includes(f))?1:0)+(FAMOUS.some(f=>nrm(r.fora).includes(f))?1:0))+(LFAME[r.liga]||0)+2*(1-Math.max(...fin(r)));
-    h+=heroCard(cand.reduce((a,b)=>sc(b)>sc(a)?b:a));
+    h+=heroCard(cand.reduce((a,b)=>sc(b)>sc(a)?b:a),heroTag);
   }
   const keys=Object.keys(days).slice(0,3);
-  const today=dayKey(now);
   for(const k of keys){
     const d=new Date(days[k][0].inicio_utc);
     h+=`<h2>${k===today?"Hoje":fmtDay(d)}</h2>`+days[k].map(gameCard).join("");
