@@ -103,6 +103,7 @@ CLEAR_FAV = 0.60       # "favorito claro" (nos testes acertou ~72-75% das vezes)
 
 # histórico
 HIST_DIR = "historico"
+NIGHT_FILE = os.path.join(HIST_DIR, "noite_enviada.txt")
 PICKS_FILE = f"{HIST_DIR}/sugestoes.csv"
 PREDS_FILE = f"{HIST_DIR}/previsoes.csv"
 STALE_DAYS = 7
@@ -1521,16 +1522,28 @@ def render_card(html):
         return None
 
 
+def _tg_photo_post(method, data, files, timeout):
+    """POST ao Telegram com 3 tentativas (a rede das Actions às vezes corta a ligação)."""
+    last = None
+    for i in range(3):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", data=data, files=files, timeout=timeout)
+            r.raise_for_status()
+            return True
+        except Exception as e:  # noqa: BLE001
+            last = e
+            print(f"Telegram {method}: tentativa {i + 1} falhou:", e, file=sys.stderr)
+            time.sleep(float(os.getenv("TG_RETRY_WAIT", "4")))
+    raise last
+
+
 def send_card(html, caption=""):
     png = render_card(html)
     if not png:
         return False
     try:
-        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
-                          data={"chat_id": TG_CHAT, "caption": caption[:1000], "parse_mode": "HTML"},
-                          files={"photo": ("radar.png", png, "image/png")}, timeout=60)
-        r.raise_for_status()
-        return True
+        return _tg_photo_post("sendPhoto", {"chat_id": TG_CHAT, "caption": caption[:1000], "parse_mode": "HTML"},
+                              {"photo": ("radar.png", png, "image/png")}, 60)
     except Exception as e:  # noqa: BLE001
         print("Cartão: envio falhou:", e, file=sys.stderr)
         return False
@@ -1603,19 +1616,33 @@ def render_cards(htmls):
 
 
 def send_album(pngs, caption=""):
+    """Envia os cartões em álbuns de 10. Se o álbum falhar, tenta um a um. Devolve True se algum foi enviado."""
+    sent = 0
     for a in range(0, len(pngs), 10):
         chunk = pngs[a:a + 10]
-        if len(chunk) == 1:
-            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto", data={"chat_id": TG_CHAT, "caption": caption[:900] if a == 0 else "", "parse_mode": "HTML"},
-                          files={"photo": ("j0.png", chunk[0], "image/png")}, timeout=60).raise_for_status()
-            continue
-        media = [{"type": "photo", "media": f"attach://p{k}"} for k in range(len(chunk))]
-        if a == 0 and caption:
-            media[0]["caption"] = caption[:900]
-            media[0]["parse_mode"] = "HTML"
-        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMediaGroup",
-                      data={"chat_id": TG_CHAT, "media": json.dumps(media)},
-                      files={f"p{k}": (f"j{k}.png", b, "image/png") for k, b in enumerate(chunk)}, timeout=120).raise_for_status()
+        cap = caption[:900] if a == 0 else ""
+        try:
+            if len(chunk) == 1:
+                _tg_photo_post("sendPhoto", {"chat_id": TG_CHAT, "caption": cap, "parse_mode": "HTML"},
+                               {"photo": ("j0.png", chunk[0], "image/png")}, 60)
+            else:
+                media = [{"type": "photo", "media": f"attach://p{k}"} for k in range(len(chunk))]
+                if cap:
+                    media[0]["caption"] = cap
+                    media[0]["parse_mode"] = "HTML"
+                _tg_photo_post("sendMediaGroup", {"chat_id": TG_CHAT, "media": json.dumps(media)},
+                               {f"p{k}": (f"j{k}.png", b, "image/png") for k, b in enumerate(chunk)}, 120)
+            sent += len(chunk)
+        except Exception as e:  # noqa: BLE001
+            print("Álbum falhou, a enviar um a um:", e, file=sys.stderr)
+            for k, b in enumerate(chunk):
+                try:
+                    _tg_photo_post("sendPhoto", {"chat_id": TG_CHAT, "caption": cap if k == 0 else "", "parse_mode": "HTML"},
+                                   {"photo": (f"j{k}.png", b, "image/png")}, 60)
+                    sent += 1
+                except Exception as e2:  # noqa: BLE001
+                    print("Cartão individual falhou:", e2, file=sys.stderr)
+    return sent > 0
 
 
 ROWS_PER_CARD = 7
@@ -1661,8 +1688,7 @@ def league_cards(shown, now):
         return False
     pngs = render_cards(htmls)
     if pngs:
-        send_album(pngs, f"🃏 <b>Os jogos de hoje</b> ({len(pngs)} cartões, um por liga)")
-        return True
+        return send_album(pngs, f"🃏 <b>Os jogos de hoje</b> ({len(pngs)} cartões, um por liga)")
     return False
 
 
@@ -1944,10 +1970,22 @@ def results_night(now):
     newly = settle(picks_h, preds_h, idx, now)
     write_csv(PICKS_FILE, PICK_FIELDS, picks_h)
     write_csv(PREDS_FILE, PRED_FIELDS, preds_h)
-    done = sorted((r for r in preds_h if r["id"] in before and r["estado"] == "resolvida"),
+    today_l = now.astimezone(LISBON).date()
+    # jogos de HOJE já terminados (mesmo que outra execução os tenha resolvido antes das 23:30)
+    done = sorted((r for r in preds_h if r["estado"] == "resolvida"
+                   and (r["id"] in before or parse_iso(r["inicio_utc"]).astimezone(LISBON).date() == today_l)),
                   key=lambda r: r["inicio_utc"])
+    print(f"Resultados: {len(done)} jogos terminados hoje, {len(newly)} sugestões novas resolvidas.", file=sys.stderr)
+    try:
+        with open(NIGHT_FILE, encoding="utf-8") as f:
+            last = f.read().strip()
+    except OSError:
+        last = ""
+    if last == f"{today_l.isoformat()}:{len(done)}:{len(newly)}" and not os.getenv("FORCAR_NOITE"):
+        print("Resumo da noite já enviado com os mesmos jogos; não repito.", file=sys.stderr)
+        return
     if not done and not newly:
-        print("Sem jogos novos terminados; não envio nada.", file=sys.stderr)
+        print("Sem jogos terminados hoje; não envio nada.", file=sys.stderr)
         return
     d = now.astimezone(LISBON)
     blocks = [f"🌙 <b>RESULTADOS DE HOJE</b>\n📅 {DIAS[d.weekday()]}, {d:%d/%m/%Y}\n━━━━━━━━━━━━━━━"]
@@ -1996,6 +2034,12 @@ def results_night(now):
             card_ok = send_card(night_html(done, now, f"<b>●</b><span>{esc(re.sub(r'^\S+\s+', '', sl2))}</span>" if sl2 else ""), "🌙 <b>Resultados de hoje</b>")
     except Exception as e:  # noqa: BLE001
         print("Cartão da noite falhou:", e, file=sys.stderr)
+    try:
+        os.makedirs(HIST_DIR, exist_ok=True)
+        with open(NIGHT_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{today_l.isoformat()}:{len(done)}:{len(newly)}")
+    except OSError:
+        pass
     if card_ok and not os.getenv("TEXTO_TAMBEM"):
         if hist or duel:   # o cartão já mostra os resultados; segue só o texto da banca/duelos
             telegram(hist + duel)
@@ -2933,19 +2977,21 @@ def main(now=None):
         print("equipas.csv falhou:", e, file=sys.stderr)
     cards_ok = False
     weekly_done = False
-    try:
-        cards_ok = league_cards(shown, now)   # primeiro todas as ligas...
-        morning_card(shown, now)              # ...e no fim o jogo do dia
-        if now.astimezone(LISBON).weekday() == 0:
-            try:
-                wh = weekly_card_html(read_csv(PICKS_FILE), read_csv(PREDS_FILE), now)
-                if wh and send_card(wh, "📅 <b>A semana passada</b>"):
-                    weekly_done = True
-            except Exception as e:  # noqa: BLE001
-                print("Cartão semanal falhou:", e, file=sys.stderr)
-        gemini_card(summary, news, now)       # cartão da IA (leitura do dia + notícias)
-    except Exception as e:  # noqa: BLE001
-        print("Cartões da manhã falharam:", e, file=sys.stderr)
+
+    def _try(label, fn):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            print(f"{label} falhou:", e, file=sys.stderr)
+            return False
+    cards_ok = _try("Cartões das ligas", lambda: league_cards(shown, now))   # primeiro todas as ligas...
+    _try("Cartão do jogo do dia", lambda: morning_card(shown, now))          # ...e no fim o jogo do dia
+    if now.astimezone(LISBON).weekday() == 0:
+        def _week():
+            wh = weekly_card_html(read_csv(PICKS_FILE), read_csv(PREDS_FILE), now)
+            return bool(wh and send_card(wh, "📅 <b>A semana passada</b>"))
+        weekly_done = _try("Cartão semanal", _week)
+    _try("Cartão do Gemini", lambda: gemini_card(summary, news, now))
     if not cards_ok or os.getenv("TEXTO_TAMBEM"):   # com cartões enviados, o texto fica só como reserva
         telegram(blocks)
     elif extra:   # sugestões, banca, calibração...: continuam em texto curto (o resumo semanal já foi em cartão)
