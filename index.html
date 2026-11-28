@@ -186,6 +186,11 @@ body{padding-bottom:calc(60px + env(safe-area-inset-bottom))}
 .res .m b{font-weight:800}
 .res .s{font-family:var(--serif);font-weight:800;font-size:20px}
 .card table{width:100%}.card td{padding:9px 6px 9px 0;border-bottom:1px solid var(--line)}.card tr:first-child th{border-bottom:2px solid var(--ink);padding-bottom:6px;font-size:11px}
+#aovivo .kpis{grid-template-columns:repeat(3,1fr);gap:8px}#aovivo .kpi .v{font-size:30px}#aovivo .kpi .l{font-size:11px}
+#como .faq{border-radius:0;background:transparent;border:0;border-top:2px solid var(--ink);box-shadow:none;padding:14px 0}
+#como .faq summary{display:flex;gap:14px;align-items:baseline}
+#como .faq .qn{font-family:var(--serif);font-style:italic;font-weight:800;font-size:22px;color:var(--accent)}
+#como .faq b{font-family:var(--serif);font-weight:800;font-size:19px}
 .lead .n.ok{color:var(--good)}.lead .n.no{color:var(--bad)}
 @media (prefers-reduced-motion:no-preference){.rv{opacity:0;transform:translateY(22px);transition:opacity .6s ease,transform .6s ease}.rv.in{opacity:1;transform:none}}
 </style>
@@ -399,17 +404,18 @@ async function loadLive(){
   try{const r=await fetch(base+"aovivo.json?t="+Math.floor(Date.now()/30000));if(!r.ok)return null;return await r.json()}catch(e){return null}
 }
 function renderAoVivo(L){
-  if(!L) return `<div class="card"><b>🔴 Ao vivo</b><p class="muted">Todos os dias o grupo vota no jogo a seguir ao vivo. Quando começar, aparece aqui o resultado e as probabilidades a mudar. Ainda não houve nenhum jogo ao vivo.</p></div>`;
+  if(!L) return `<div class="lead"><div class="k">Edição especial</div><div class="big"><span class="n" style="font-size:clamp(64px,19vw,120px)">Ao vivo</span></div><div class="cap">Todos os dias o grupo vota no jogo a seguir ao vivo. Quando começar, aparece aqui o resultado e as probabilidades a mudar.</div><div class="cap">Ainda não houve nenhum jogo ao vivo.</div></div>`;
   const nome={NS:"Vai começar",["1H"]:"1.ª parte",HT:"Intervalo",["2H"]:"2.ª parte",ET:"Prolongamento",P:"Penáltis",FT:"Terminado",AET:"Terminado",PEN:"Terminado"}[L.estado]||L.estado;
   const age=Math.round((Date.now()-new Date(L.atualizado))/60000);
   const live=!L.terminado&&age<20;
   const [h,d,a]=L.agora,[h0,d0,a0]=L.pre;
   const hist=L.hist||[];
-  let x=`<div class="card"><div class="muted">${live?`<b style="color:var(--bad)">🔴 AO VIVO</b> · ${L.estado==="NS"?"vai começar":esc(nome)+(L.minuto?" · "+L.minuto+"'":"")}`:L.terminado?"✅ Último jogo seguido ao vivo (terminado)":"⏸️ Último jogo seguido ao vivo"}</div>
-   <div style="text-align:center;margin:10px 0"><div style="font-size:17px"><b>${esc(short(L.casa))}</b> vs <b>${esc(short(L.fora))}</b></div><div class="score">${L.golos_casa}–${L.golos_fora}</div></div>
+  let x=`<div class="lead"><div class="k">${live?`<span style="color:var(--bad)">● Ao vivo</span> · ${L.estado==="NS"?"vai começar":esc(nome)+(L.minuto?" · "+L.minuto+"'":"")}`:L.terminado?"Último jogo seguido · terminado":"Último jogo seguido ao vivo"}</div>
+   <div class="big"><span class="n" style="font-size:clamp(90px,28vw,170px)">${L.golos_casa}–${L.golos_fora}</span></div>
+   <div class="cap serif" style="font-family:var(--serif);font-weight:800;font-size:26px;color:var(--ink)">${esc(short(L.casa))} <i style="color:var(--accent)">contra</i> ${esc(short(L.fora))}</div></div>
    <div class="kpis"><div class="kpi"><div class="v" style="color:var(--home)">${pct(h)}</div><div class="l">${esc(short(L.casa))} <span class="muted">(antes ${pct(h0)})</span></div></div>
    <div class="kpi"><div class="v" style="color:var(--draw)">${pct(d)}</div><div class="l">Empate <span class="muted">(antes ${pct(d0)})</span></div></div>
-   <div class="kpi"><div class="v" style="color:var(--away)">${pct(a)}</div><div class="l">${esc(short(L.fora))} <span class="muted">(antes ${pct(a0)})</span></div></div></div></div>`;
+   <div class="kpi"><div class="v" style="color:var(--away)">${pct(a)}</div><div class="l">${esc(short(L.fora))} <span class="muted">(antes ${pct(a0)})</span></div></div></div>`;
   if(hist.length>=2) x+=`<h2>Probabilidades ao longo do jogo</h2><div class="card">${lineChart([{name:short(L.casa),color:"var(--home)",pts:hist.map(p=>p[1])},{name:"Empate",color:"var(--draw)",pts:hist.map(p=>p[2])},{name:short(L.fora),color:"var(--away)",pts:hist.map(p=>p[3])}],{yMin:0,yMax:1,labels:hist.map(p=>p[0]+"'")})}</div>`;
   if((L.eventos||[]).length) x+=`<h2>Golos</h2><div class="card">`+L.eventos.map(e=>`<div class="res"><div class="m">${esc(e)}</div></div>`).join("")+`</div>`;
   x+=`<div class="muted" style="margin-top:8px">Atualizado há ${age<1?"menos de 1":age} min. O site pode ter até ~5 min de atraso; o Telegram é mais rápido. Esta página atualiza sozinha.</div>`;
@@ -510,8 +516,8 @@ function renderJogos(P){
 }
 
 function renderComo(){
-  const q=(t,a)=>`<details class="card"><summary><b>${t}</b></summary><p class="muted" style="font-size:14.5px;margin:10px 0 0">${a}</p></details>`;
-  return `<div class="hero"><div class="k">Radar do Golo</div><div class="t">Probabilidades honestas, com as contas à vista</div><div class="meta">Um bot de Telegram que analisa jogos todos os dias e um site que mostra se tem razão.</div></div>`+
+  let qn=0;const q=(t,a)=>`<details class="card faq"><summary><span class="qn">${String(++qn).padStart(2,"0")}</span><b>${t}</b></summary><p class="muted" style="font-size:14.5px;margin:10px 0 0">${a}</p></details>`;
+  return `<div class="lead" style="text-align:left"><div class="k">Radar do Golo · Manual de leitura</div><div class="serif" style="font-family:var(--serif);font-weight:800;font-size:clamp(34px,10vw,56px);line-height:1.02;letter-spacing:-.02em;margin-top:8px">Probabilidades honestas, <i style="color:var(--accent)">com as contas à vista.</i></div><div class="cap">Um bot de Telegram que analisa jogos todos os dias e um site que mostra se tem razão.</div></div>`+
   q("De onde vêm as percentagens?","De duas fontes: um modelo estatístico (golos esperados de cada equipa, a partir dos resultados desta e das últimas épocas) e o consenso das casas de apostas, depois de retirada a margem. O resultado final é sobretudo o mercado, com um toque do modelo, porque nos nossos testes o mercado é mais certeiro que o modelo sozinho.")+
   q("O bot dá conselhos de apostas?","Não. As sugestões são odds que ficam acima do consenso, e servem para medir se o bot encontra valor. Um palpite provável não é o mesmo que um bom negócio: quanto mais provável, mais baixa a odd. Aposta com responsabilidade.")+
   q("Como sei que não apagam os falhanços?","As previsões são gravadas num repositório público do GitHub antes dos jogos, com a hora de cada alteração. Qualquer pessoa pode ver o histórico completo.")+
@@ -623,7 +629,7 @@ function teamBanner(team){
 }
 function renderEquipa(){
   const team=getTeam();
-  if(!team) return `<div class="card"><b>Escolhe a tua equipa favorita</b><p class="muted">Vês aqui o próximo jogo, a forma recente e as hipóteses na época.</p><div class="ctas"><button class="btn" id="pick">⭐ Escolher equipa</button></div></div>`;
+  if(!team) return `<div class="lead"><div class="k">A tua edição</div><div class="big"><span class="n" style="font-size:clamp(90px,28vw,160px)">★</span></div><div class="cap">Escolhe a tua equipa favorita e esta página passa a ser só dela: o próximo jogo, a forma recente e as hipóteses na época.</div><div class="ctas" style="justify-content:center;margin-top:14px"><button class="btn" id="pick">Escolher equipa</button></div></div>`;
   return teamBanner(team)+teamPanel(team);
 }
 function bindTeamButtons(){const b=document.getElementById("pick");if(b)b.onclick=()=>openTeamDialog(false)}
