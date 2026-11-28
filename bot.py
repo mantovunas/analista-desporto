@@ -3017,6 +3017,29 @@ def main(now=None):
                 telegram(sb)
         except Exception as e:  # noqa: BLE001
             print("Corrida da época falhou:", e, file=sys.stderr)
+    try:
+        site_promo(now, sum(1 for gs in shown.values() for g in gs if g.get("final")))
+    except Exception as e:  # noqa: BLE001
+        print("Mensagem do site falhou:", e, file=sys.stderr)
+
+
+SITE_PROMOS = [
+    "🕵️ Isto foi só o cartão de visita. No site está o resto do dossier: probabilidades, histórico e a banca, tudo a atualizar sozinho.",
+    "📰 Quem lê só o Telegram fica com metade da edição! O resto está na capa do site, com o jogo do dia em letras gigantes.",
+    "🔭 Queres ver o que o bot viu? No site há a corrida pelo título de cada liga, atualizada todas as manhãs.",
+    "🧮 Os números não cabem todos numa mensagem. No site há o desempenho do bot, jogo a jogo, sem truques.",
+    "🔴 À noite, as probabilidades mexem a cada golo. Abre o site e vê o Ao vivo mexer-se minuto a minuto.",
+    "🏟️ Torce por uma equipa? No site escolhes a tua e o Radar mostra os jogos dela e como o bot tem acertado nela.",
+    "🎯 O bot acerta? Não acreditas em ninguém, e fazes bem. Confere tu mesmo o histórico completo no site.",
+    "⚡ Dica de bancada: guarda o site no ecrã inicial do telemóvel e fica com o Radar a um toque, como uma app.",
+]
+
+
+def site_promo(now, n_games=0):
+    """Mensagem final, diferente a cada dia, a convidar para o site."""
+    i = now.astimezone(LISBON).date().toordinal() % len(SITE_PROMOS)
+    extra = f"\n\n⚽ Hoje há {n_games} jogos no radar." if n_games else ""
+    tg_send(f"{SITE_PROMOS[i]}{extra}\n\n👉 <a href=\"{SITE_URL}\">Abrir o Radar do Golo</a>")
 
 
 if __name__ == "__main__":
