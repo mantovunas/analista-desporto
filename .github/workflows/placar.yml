@@ -1,0 +1,46 @@
+name: analista-placar
+
+on:
+  schedule:
+    # Horas em UTC. A cada 10 min, das 11h às 23h50 e à 0h-1h50 (jogos tardios).
+    - cron: "*/10 11-23 * * *"
+    - cron: "*/10 0-1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: analista-placar
+  cancel-in-progress: true
+
+jobs:
+  placar:
+    if: github.event_name != 'schedule' || github.repository == 'mantovunas/analista-desporto'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python bot.py
+        env:
+          MODO: placar
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: Guardar placar
+        run: |
+          git config user.name "analista-bot"
+          git config user.email "analista-bot@users.noreply.github.com"
+          git add historico/placar.json
+          if git diff --cached --quiet; then
+            echo "Sem alterações"
+          else
+            git commit -m "Atualizar placar ao vivo"
+            git pull --rebase --autostash
+            git push
+          fi
