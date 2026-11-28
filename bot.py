@@ -1216,7 +1216,7 @@ def history_blocks(picks, preds, newly):
         lines.append("<i>Brier: 0.667 equivale a chutar; o mercado costuma ficar perto de 0.57.</i>")
     if len(res) < MIN_SAMPLE:
         lines.append(f"⚠️ <i>Amostra pequena ({len(res)} sugestões): só é fiável a partir de {MIN_SAMPLE}+.</i>")
-    blocks.append("\n".join(lines))
+    # O bloco "📊 DESEMPENHO DO BOT" já não é enviado (removido a pedido); os números continuam no site.
     return blocks
 
 
@@ -2654,6 +2654,42 @@ def pick_live_game(preds, text, now):
     return best
 
 
+PLACAR_FILE = f"{HIST_DIR}/placar.json"
+
+
+def placar_mode(now):
+    """MODO=placar: todos os jogos a decorrer agora (ligas do plano grátis da football-data) -> historico/placar.json.
+    Uma só chamada à API; o site mostra a lista no separador 'Ao vivo'."""
+    r = requests.get("https://api.football-data.org/v4/matches", headers={"X-Auth-Token": FD_KEY},
+                     params={"status": "IN_PLAY,PAUSED"}, timeout=30)
+    r.raise_for_status()
+    jogos = []
+    for m in r.json().get("matches", []):
+        ft = (m.get("score") or {}).get("fullTime") or {}
+        jogos.append({
+            "liga": (m.get("competition") or {}).get("name", ""),
+            "casa": (m.get("homeTeam") or {}).get("name", ""),
+            "fora": (m.get("awayTeam") or {}).get("name", ""),
+            "golos_casa": ft.get("home") if ft.get("home") is not None else 0,
+            "golos_fora": ft.get("away") if ft.get("away") is not None else 0,
+            "estado": "HT" if m.get("status") == "PAUSED" else "LIVE",
+            "inicio_utc": m.get("utcDate", ""),
+        })
+    jogos.sort(key=lambda j: (j["inicio_utc"], j["liga"]))
+    try:
+        with open(PLACAR_FILE, encoding="utf-8") as f:
+            antes = json.load(f).get("jogos", [])
+    except (OSError, ValueError):
+        antes = []
+    if not jogos and not antes:
+        print("Placar: sem jogos a decorrer.", file=sys.stderr)
+        return
+    os.makedirs(HIST_DIR, exist_ok=True)
+    with open(PLACAR_FILE, "w", encoding="utf-8") as f:
+        json.dump({"atualizado": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "jogos": jogos}, f, ensure_ascii=False)
+    print(f"Placar: {len(jogos)} jogos a decorrer.", file=sys.stderr)
+
+
 AOVIVO_FILE = f"{HIST_DIR}/aovivo.json"
 
 
@@ -2842,6 +2878,12 @@ def main(now=None):
                 telegram(sb)
         except Exception as e:  # noqa: BLE001
             print("Modo simulação falhou:", e, file=sys.stderr)
+        return
+    if os.getenv("MODO", "").strip().lower() == "placar":
+        try:
+            placar_mode(now)
+        except Exception as e:  # noqa: BLE001
+            print("Modo placar falhou:", e, file=sys.stderr)
         return
     if os.getenv("MODO", "").strip().lower() == "aovivo":
         try:
